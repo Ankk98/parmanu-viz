@@ -18,12 +18,13 @@ SitLoader.prototype.loadFrame = async function (files) {
   }
 
   const raw = parseSitLabel3d(await files.labelFile.text());
-  let boxes7 = raw.map(function (o) {
-    return o.box7.slice();
+  // Transform fns slice their inputs, so passing references is safe.
+  const input7 = raw.map(function (o) {
+    return o.box7;
   });
-
+  let boxes7;
   if (files.skipEgoTransform) {
-    boxes7 = applySitLabelYawFlip(boxes7);
+    boxes7 = applySitLabelYawFlip(input7);
   } else {
     if (!files.egoFile) {
       throw new Error(
@@ -31,7 +32,7 @@ SitLoader.prototype.loadFrame = async function (files) {
       );
     }
     const ego = parseEgoMatrix(await files.egoFile.text());
-    boxes7 = transformBoxesOfficialVisualize(boxes7, ego);
+    boxes7 = transformBoxesOfficialVisualize(input7, ego);
   }
 
   const boxes = [];
@@ -110,7 +111,15 @@ function parseSitLabel3d(text) {
 }
 
 function parseEgoMatrix(text) {
-  const parts = text.trim().split(',');
+  // Match visualize_3dbox_on_image.py get_ego_matrix: read first non-empty
+  // line, split on ',', reshape row-major 4x4. The matrix is T(lidar_top → global).
+  const firstLine = text.split('\n').find(function (ln) {
+    return ln.trim().length > 0;
+  });
+  if (!firstLine) {
+    throw new Error('SiT ego_trajectory: empty file.');
+  }
+  const parts = firstLine.trim().split(',');
   if (parts.length !== 16) {
     throw new Error('SiT ego_trajectory: expected 16 comma-separated values.');
   }
@@ -179,11 +188,15 @@ function invert4x4(m) {
   }
   det = 1 / det;
 
+  // inv(M) = adj(M) / det(M) = cof(M)^T / det(M).
+  // Cofactors A_ij above are stored at their (i,j) positions; we must
+  // transpose when packing into the result so off-diagonals (e.g. the
+  // translation column of an SE(3) matrix) land in the correct row/col.
   return [
-    [A00 * det, A01 * det, A02 * det, A03 * det],
-    [A10 * det, A11 * det, A12 * det, A13 * det],
-    [A20 * det, A21 * det, A22 * det, A23 * det],
-    [A30 * det, A31 * det, A32 * det, A33 * det],
+    [A00 * det, A10 * det, A20 * det, A30 * det],
+    [A01 * det, A11 * det, A21 * det, A31 * det],
+    [A02 * det, A12 * det, A22 * det, A32 * det],
+    [A03 * det, A13 * det, A23 * det, A33 * det],
   ];
 }
 
@@ -218,7 +231,11 @@ function transformBoxesOfficialVisualize(boxes, ego) {
   return out;
 }
 
-/** Skip ego: still apply label yaw sign used after transform in official viz. */
+/**
+ * "Skip ego" mode: keep label x,y,z as-is and apply the same yaw sign flip
+ * that the official viz applies after inv(ego). Useful for inspecting labels
+ * without an ego_trajectory file.
+ */
 function applySitLabelYawFlip(boxes) {
   const out = [];
   for (let i = 0; i < boxes.length; i++) {
@@ -408,9 +425,7 @@ function registerSitDataset() {
     fileHint:
       'velo/concat .pcd + label_3d; ego_trajectory unless “skip ego” (official viz math)',
     Loader: SitLoader,
-    createExplorer: function (opts) {
-      return createSitExplorer(opts);
-    },
+    createExplorer: createSitExplorer,
   });
 }
 
