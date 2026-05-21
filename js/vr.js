@@ -1,29 +1,27 @@
 /**
- * WebXR VR: controllers, locomotion, VR UI panels.
- * Requires THREE, THREE.VRButton, window.viewer.
+ * WebXR VR for parmanu-viz.
+ *
+ * Design notes:
+ * - All controller input is read *live* from `session.inputSources[i].gamepad`
+ *   inside the XR animation loop. Nothing is cached on controllers; there is
+ *   no per-controller state machine.
+ * - Mapping follows the WebXR `xr-standard` gamepad layout used by Quest Touch:
+ *     axes[2] = thumbstick X       axes[3] = thumbstick Y
+ *     buttons[0] = trigger         buttons[1] = grip (squeeze)
+ * - Three.js `renderer.xr.getController(i)` is used only for visualization
+ *   (ray line) and for teleport raycasts (its matrixWorld follows the
+ *   targetRaySpace of `session.inputSources[i]`).
  */
 (function () {
-  var VR_HELP_LINES = [
-    'Trigger: point at floor -> Teleport',
-    'Left stick: Walk / Strafe (body facing)',
-    'Hold left grip + stick up/down: Height',
-    'Right stick: Turn (left/right) / Look up-down',
-    'Hold right grip + stick up/down: Move closer / farther',
-    'Tap right grip (no stick): Toggle help panels',
-  ];
-
   var STICK_DEADZONE = 0.15;
-  var WALK_SPEED = 2.0;
-  var HEIGHT_SPEED = 1.5;
-  var DOLLY_SPEED = 2.5;
-  var ROT_SPEED = 2.0;
+  var WALK_SPEED = 2.0;      // m/s
+  var FLY_SPEED = 1.5;       // m/s (right stick Y)
+  var TURN_SPEED = 2.0;      // rad/s (right stick X, yaw)
 
   var raycaster = new THREE.Raycaster();
   var _tmpMatrix = new THREE.Matrix4();
   var _dir = new THREE.Vector3();
   var _right = new THREE.Vector3();
-  var _axisX = new THREE.Vector3(1, 0, 0);
-  var _worldDir = new THREE.Vector3();
 
   var state = {
     viewer: null,
@@ -42,15 +40,17 @@
     originLabel: null,
     controlsPanel: null,
     vrLegendPanel: null,
-    xrController0: null,
-    xrController1: null,
-    controlsHelpTimeout: null,
-    legendTexture: null,
     debugPanel: null,
     debugCtx: null,
     debugTexture: null,
-    panelsToggleDebounce: 0,
+    legendTexture: null,
+    xrControllers: [],
+    // Per-input edge-trigger state (key: XRInputSource).
+    prevTrigger: new WeakMap(),
+    prevGrip: new WeakMap(),
   };
+
+  // ---------- WebXR status (HUD line) ---------------------------------------
 
   var xrStatusSettled = false;
   var xrStatusTimer = null;
@@ -70,17 +70,13 @@
     if (!window.isSecureContext) {
       setXrStatusHtml(
         '<strong>WebXR:</strong> needs HTTPS (or localhost). ' +
-          'Open <a href="https://ankk98.github.io/parmanu-viz/">GitHub Pages</a> for VR, ' +
-          'or use HTTPS on your LAN server.',
+          'Open <a href="https://ankk98.github.io/parmanu-viz/">GitHub Pages</a> for VR.',
       );
       xrStatusSettled = true;
       return;
     }
-
     if (!('xr' in navigator)) {
-      setXrStatusHtml(
-        '<strong>WebXR:</strong> not available in this browser',
-      );
+      setXrStatusHtml('<strong>WebXR:</strong> not available in this browser');
       xrStatusSettled = true;
       return;
     }
@@ -99,27 +95,22 @@
         if (xrStatusSettled) return;
         xrStatusSettled = true;
         if (xrStatusTimer) clearTimeout(xrStatusTimer);
-        if (supported) {
-          setXrStatusHtml(
-            '<strong>WebXR:</strong> immersive-vr supported',
-          );
-        } else {
-          setXrStatusHtml(
-            '<strong>WebXR:</strong> immersive-vr not supported. ' +
-              'Use Quest Browser and enable WebXR in chrome://flags',
-          );
-        }
+        setXrStatusHtml(
+          supported
+            ? '<strong>WebXR:</strong> immersive-vr supported'
+            : '<strong>WebXR:</strong> immersive-vr not supported. Use Quest Browser; enable WebXR in chrome://flags',
+        );
       })
       .catch(function (err) {
         if (xrStatusSettled) return;
         xrStatusSettled = true;
         if (xrStatusTimer) clearTimeout(xrStatusTimer);
         var msg = err && err.message ? err.message : String(err);
-        setXrStatusHtml(
-          '<strong>WebXR:</strong> check failed (' + msg + ')',
-        );
+        setXrStatusHtml('<strong>WebXR:</strong> check failed (' + msg + ')');
       });
   }
+
+  // ---------- VR Button toggle ---------------------------------------------
 
   function setVrButtonReady(ready) {
     if (!state.vrBtn || !state.vrBtn.id) return;
@@ -128,9 +119,15 @@
     state.vrBtn.style.pointerEvents = ready ? '' : 'none';
   }
 
-  function setDesktopControlsEnabled(enabled) {
-    if (state.controls) state.controls.enabled = enabled;
-  }
+  // ---------- Canvas-texture panels ----------------------------------------
+
+  var VR_HELP_LINES = [
+    'Left stick: Walk / Strafe',
+    'Right stick X: Turn (yaw)',
+    'Right stick Y: Fly up / down',
+    'Trigger: aim at floor -> Teleport',
+    'Grip: toggle help / legend',
+  ];
 
   function createVRControlsPanel() {
     var canvas = document.createElement('canvas');
@@ -147,12 +144,11 @@
     ctx.textAlign = 'left';
     ctx.fillText('VR Controls', 40, 80);
     ctx.fillStyle = '#ffffff';
-    ctx.font = '36px Arial';
-    var y = 150;
-    var i;
-    for (i = 0; i < VR_HELP_LINES.length; i++) {
+    ctx.font = '34px Arial';
+    var y = 160;
+    for (var i = 0; i < VR_HELP_LINES.length; i++) {
       ctx.fillText(VR_HELP_LINES[i], 60, y);
-      y += 70;
+      y += 64;
     }
     var texture = new THREE.CanvasTexture(canvas);
     var panel = new THREE.Mesh(
@@ -188,8 +184,7 @@
       ctx.font = '28px Arial';
       ctx.fillText('No boxes to display', 30, y);
     } else {
-      var i;
-      for (i = 0; i < entries.length; i++) {
+      for (var i = 0; i < entries.length; i++) {
         var ent = entries[i];
         ctx.fillStyle = ent.hex;
         ctx.fillRect(30, y - 20, 35, 35);
@@ -252,92 +247,29 @@
     return label;
   }
 
-  /**
-   * Pick thumbstick X/Y from a Gamepad. Quest Touch typically exposes
-   * thumbstick on axes[2,3]; some browsers/profiles use [0,1].
-   * Auto-select whichever pair has non-zero deflection.
-   */
-  function readThumbstick(gp) {
-    if (!gp || !gp.axes || gp.axes.length < 2) {
-      return { x: 0, y: 0 };
-    }
-    var x01 = +gp.axes[0] || 0;
-    var y01 = +gp.axes[1] || 0;
-    var x23 = gp.axes.length > 3 ? +gp.axes[2] || 0 : 0;
-    var y23 = gp.axes.length > 3 ? +gp.axes[3] || 0 : 0;
-    var mag01 = x01 * x01 + y01 * y01;
-    var mag23 = x23 * x23 + y23 * y23;
-    var rawX = mag23 > mag01 ? x23 : x01;
-    var rawY = mag23 > mag01 ? y23 : y01;
-    var dz = STICK_DEADZONE;
-    return {
-      x: Math.abs(rawX) > dz ? rawX : 0,
-      y: Math.abs(rawY) > dz ? rawY : 0,
-    };
+  function createDebugPanel() {
+    var canvas = document.createElement('canvas');
+    canvas.width = 1024;
+    canvas.height = 256;
+    state.debugCtx = canvas.getContext('2d');
+    state.debugTexture = new THREE.CanvasTexture(canvas);
+    var panel = new THREE.Mesh(
+      new THREE.PlaneGeometry(1.6, 0.4),
+      new THREE.MeshBasicMaterial({
+        map: state.debugTexture,
+        transparent: true,
+        side: THREE.DoubleSide,
+      }),
+    );
+    panel.position.set(0, 1.05, -1.5);
+    panel.visible = false;
+    return panel;
   }
 
-  function isButtonPressed(gp, idx) {
-    if (!gp || !gp.buttons || !gp.buttons[idx]) return false;
-    var b = gp.buttons[idx];
-    return !!(b.pressed || (b.value != null && b.value > 0.5));
-  }
+  // ---------- Controllers (visual rays only) -------------------------------
 
-  /** Live input snapshot from the active XR session each frame. */
-  function snapshotInputs() {
-    var snap = {
-      left: { gp: null, handedness: null },
-      right: { gp: null, handedness: null },
-      raw: [],
-    };
-    var session = state.renderer && state.renderer.xr.getSession();
-    if (!session || !session.inputSources) return snap;
-    var sources = session.inputSources;
-    var firstWith = null;
-    for (var i = 0; i < sources.length; i++) {
-      var src = sources[i];
-      if (!src) continue;
-      var gp = src.gamepad || null;
-      snap.raw.push({ hand: src.handedness, gp: gp });
-      if (gp && !firstWith) firstWith = { hand: src.handedness, gp: gp };
-      if (src.handedness === 'left') {
-        snap.left.gp = gp;
-        snap.left.handedness = 'left';
-      } else if (src.handedness === 'right') {
-        snap.right.gp = gp;
-        snap.right.handedness = 'right';
-      }
-    }
-    // Fallback: if handedness is missing (some Quest setups), assign by order
-    if (!snap.left.gp && !snap.right.gp && firstWith && sources.length >= 1) {
-      // index 0 -> left, index 1 -> right (matches getController(0/1))
-      if (sources[0] && sources[0].gamepad) snap.left.gp = sources[0].gamepad;
-      if (sources[1] && sources[1].gamepad) snap.right.gp = sources[1].gamepad;
-    }
-    return snap;
-  }
-
-  function addXRController(index) {
-    var controller = state.renderer.xr.getController(index);
-    controller.userData.index = index;
-    controller.userData.isSelecting = false;
-    controller.userData.gamepad = null;
-    controller.userData.handedness = null;
-    controller.userData.inputSource = null;
-
-    controller.addEventListener('connected', function (event) {
-      controller.userData.inputSource = event.data || null;
-      controller.userData.gamepad =
-        event.data && event.data.gamepad ? event.data.gamepad : null;
-      controller.userData.handedness = event.data
-        ? event.data.handedness
-        : null;
-    });
-    controller.addEventListener('disconnected', function () {
-      controller.userData.inputSource = null;
-      controller.userData.gamepad = null;
-      controller.userData.handedness = null;
-    });
-
+  function addController(index) {
+    var ctrl = state.renderer.xr.getController(index);
     var lineGeom = new THREE.BufferGeometry();
     lineGeom.setAttribute(
       'position',
@@ -348,106 +280,152 @@
       new THREE.LineBasicMaterial({ color: 0xffffff }),
     );
     line.scale.z = 20;
-    controller.add(line);
-
-    controller.addEventListener('selectstart', function () {
-      controller.userData.isSelecting = true;
-    });
-    controller.addEventListener('selectend', function () {
-      controller.userData.isSelecting = false;
-      state.teleportMarker.visible = false;
-      var hit = intersectGround(controller);
-      if (hit) {
-        state.xrRig.position.x = hit.point.x;
-        state.xrRig.position.z = hit.point.z;
-      }
-    });
-    controller.addEventListener('squeezestart', function () {
-      var isRight =
-        controller.userData.handedness === 'right' ||
-        (controller.userData.handedness !== 'left' &&
-          controller.userData.index === 1);
-      if (isRight && state.controlsPanel && state.vrLegendPanel) {
-        var vis = !state.controlsPanel.visible;
-        state.controlsPanel.visible = vis;
-        state.vrLegendPanel.visible = vis;
-      }
-    });
-
-    state.xrRig.add(controller);
-    return controller;
+    ctrl.add(line);
+    state.xrRig.add(ctrl);
+    state.xrControllers.push(ctrl);
+    return ctrl;
   }
 
-  function intersectGround(controller) {
-    _tmpMatrix.identity().extractRotation(controller.matrixWorld);
-    raycaster.ray.origin.setFromMatrixPosition(controller.matrixWorld);
+  function intersectGround(ctrl) {
+    _tmpMatrix.identity().extractRotation(ctrl.matrixWorld);
+    raycaster.ray.origin.setFromMatrixPosition(ctrl.matrixWorld);
     raycaster.ray.direction.set(0, 0, -1).applyMatrix4(_tmpMatrix);
     var hits = raycaster.intersectObject(state.xrGround, false);
-    if (hits && hits.length > 0) return hits[0];
-    return null;
+    return hits && hits.length > 0 ? hits[0] : null;
   }
 
-  function updateXrLocomotion(delta, snap) {
-    if (!state.renderer.xr.isPresenting) return;
+  // ---------- Live input ---------------------------------------------------
 
-    var leftGp = snap.left.gp;
-    if (leftGp) {
-      var leftStick = readThumbstick(leftGp);
-      var ax = leftStick.x;
-      var ay = leftStick.y;
-      var leftGrip = isButtonPressed(leftGp, 1);
+  function deadzone(v) {
+    return Math.abs(v) > STICK_DEADZONE ? v : 0;
+  }
 
-      if (leftGrip && ay !== 0) {
-        state.xrRig.position.y += -ay * HEIGHT_SPEED * delta;
-      } else if (ax !== 0 || ay !== 0) {
+  /**
+   * Pair an XRInputSource with the three.js controller Object3D at the same
+   * index in `session.inputSources`. Three.js assigns inputSources to
+   * `getController(i)` in order, so indices align.
+   */
+  function processInputs(delta) {
+    var session = state.renderer.xr.getSession();
+    if (!session) return null;
+    var sources = session.inputSources;
+    if (!sources) return null;
+
+    // Find left/right sources; fall back to index 0/1 if handedness missing.
+    var leftSrc = null;
+    var rightSrc = null;
+    var leftCtrl = null;
+    var rightCtrl = null;
+
+    var i;
+    for (i = 0; i < sources.length; i++) {
+      var s = sources[i];
+      if (!s) continue;
+      if (s.handedness === 'left' && !leftSrc) {
+        leftSrc = s;
+        leftCtrl = state.xrControllers[i] || null;
+      } else if (s.handedness === 'right' && !rightSrc) {
+        rightSrc = s;
+        rightCtrl = state.xrControllers[i] || null;
+      }
+    }
+    if (!leftSrc && !rightSrc) {
+      if (sources[0]) {
+        leftSrc = sources[0];
+        leftCtrl = state.xrControllers[0] || null;
+      }
+      if (sources[1]) {
+        rightSrc = sources[1];
+        rightCtrl = state.xrControllers[1] || null;
+      }
+    }
+
+    handleLocomotion(delta, leftSrc, rightSrc);
+    handleTriggerTeleport(leftSrc, leftCtrl);
+    handleTriggerTeleport(rightSrc, rightCtrl);
+    handleGripToggle(leftSrc);
+    handleGripToggle(rightSrc);
+
+    return {
+      sources: sources,
+      left: leftSrc,
+      right: rightSrc,
+    };
+  }
+
+  function handleLocomotion(delta, leftSrc, rightSrc) {
+    // LEFT stick: walk + strafe on XZ plane, relative to camera facing.
+    var lgp = leftSrc && leftSrc.gamepad;
+    if (lgp && lgp.axes && lgp.axes.length >= 4) {
+      var lx = deadzone(lgp.axes[2]);
+      var ly = deadzone(lgp.axes[3]);
+      if (lx !== 0 || ly !== 0) {
         state.camera.getWorldDirection(_dir);
         _dir.y = 0;
         if (_dir.lengthSq() > 1e-6) {
           _dir.normalize();
           _right.set(-_dir.z, 0, _dir.x);
-          state.xrRig.position.addScaledVector(_dir, -ay * WALK_SPEED * delta);
-          state.xrRig.position.addScaledVector(_right, ax * WALK_SPEED * delta);
+          state.xrRig.position.addScaledVector(_dir, -ly * WALK_SPEED * delta);
+          state.xrRig.position.addScaledVector(_right, lx * WALK_SPEED * delta);
         }
       }
     }
 
-    var rightGp = snap.right.gp;
-    if (rightGp) {
-      var rightStick = readThumbstick(rightGp);
-      var rax = rightStick.x;
-      var ray = rightStick.y;
-      var rightGrip = isButtonPressed(rightGp, 1);
-
-      if (rightGrip && ray !== 0) {
-        state.camera.getWorldDirection(_dir);
-        _dir.y = 0;
-        if (_dir.lengthSq() > 1e-6) {
-          _dir.normalize();
-          state.xrRig.position.addScaledVector(
-            _dir,
-            -ray * DOLLY_SPEED * delta,
-          );
-        }
+    // RIGHT stick: X = yaw, Y = fly up/down.
+    var rgp = rightSrc && rightSrc.gamepad;
+    if (rgp && rgp.axes && rgp.axes.length >= 4) {
+      var rx = deadzone(rgp.axes[2]);
+      var ry = deadzone(rgp.axes[3]);
+      if (rx !== 0) {
+        state.xrRig.rotateY(-rx * TURN_SPEED * delta);
       }
-
-      if (rax !== 0) {
-        state.xrRig.rotateY(-rax * ROT_SPEED * delta);
-      }
-      if (ray !== 0 && !rightGrip) {
-        state.camera.getWorldDirection(_worldDir);
-        var pitchDelta = ray * ROT_SPEED * delta;
-        var wy = -_worldDir.y;
-        if (wy > 1) wy = 1;
-        if (wy < -1) wy = -1;
-        var currentPitch = Math.asin(wy);
-        var newPitch = currentPitch + pitchDelta;
-        var maxPitch = Math.PI * 0.44;
-        if (Math.abs(newPitch) < maxPitch) {
-          state.camera.rotateOnAxis(_axisX, pitchDelta);
-        }
+      if (ry !== 0) {
+        // ly negative = stick up = move up
+        state.xrRig.position.y += -ry * FLY_SPEED * delta;
       }
     }
   }
+
+  function handleTriggerTeleport(src, ctrl) {
+    if (!src || !ctrl) return;
+    var gp = src.gamepad;
+    var pressed = !!(gp && gp.buttons && gp.buttons[0] && gp.buttons[0].pressed);
+    var prev = state.prevTrigger.get(src) || false;
+    state.prevTrigger.set(src, pressed);
+
+    if (pressed) {
+      var hit = intersectGround(ctrl);
+      if (hit) {
+        state.teleportMarker.position.copy(hit.point);
+        state.teleportMarker.visible = true;
+      } else {
+        state.teleportMarker.visible = false;
+      }
+    } else if (prev && !pressed) {
+      // edge: trigger released -> commit teleport
+      var releaseHit = intersectGround(ctrl);
+      if (releaseHit) {
+        state.xrRig.position.x = releaseHit.point.x;
+        state.xrRig.position.z = releaseHit.point.z;
+      }
+      state.teleportMarker.visible = false;
+    }
+  }
+
+  function handleGripToggle(src) {
+    if (!src) return;
+    var gp = src.gamepad;
+    var pressed = !!(gp && gp.buttons && gp.buttons[1] && gp.buttons[1].pressed);
+    var prev = state.prevGrip.get(src) || false;
+    state.prevGrip.set(src, pressed);
+    if (pressed && !prev) {
+      var vis = !(state.controlsPanel && state.controlsPanel.visible);
+      if (state.controlsPanel) state.controlsPanel.visible = vis;
+      if (state.vrLegendPanel) state.vrLegendPanel.visible = vis;
+    }
+  }
+
+  // ---------- Debug overlay ------------------------------------------------
 
   function fmtAxes(gp) {
     if (!gp || !gp.axes) return 'no gp';
@@ -467,103 +445,55 @@
     return pressed.length ? 'btn:' + pressed.join(',') : '';
   }
 
-  function createDebugPanel() {
-    var canvas = document.createElement('canvas');
-    canvas.width = 1024;
-    canvas.height = 256;
-    state.debugCtx = canvas.getContext('2d');
-    state.debugTexture = new THREE.CanvasTexture(canvas);
-    var panel = new THREE.Mesh(
-      new THREE.PlaneGeometry(1.6, 0.4),
-      new THREE.MeshBasicMaterial({
-        map: state.debugTexture,
-        transparent: true,
-        side: THREE.DoubleSide,
-      }),
-    );
-    panel.position.set(0, 1.0, -1.5);
-    panel.visible = true;
-    return panel;
-  }
-
   function updateDebugPanel(snap) {
     var ctx = state.debugCtx;
-    if (!ctx || !state.debugTexture) return;
+    if (!ctx || !state.debugTexture || !state.debugPanel) return;
+    if (!state.debugPanel.visible) return;
     ctx.clearRect(0, 0, 1024, 256);
     ctx.fillStyle = 'rgba(0, 0, 0, 0.75)';
     ctx.fillRect(0, 0, 1024, 256);
     ctx.strokeStyle = '#00ff88';
     ctx.lineWidth = 3;
     ctx.strokeRect(6, 6, 1012, 244);
-
     ctx.fillStyle = '#00ff88';
-    ctx.font = 'bold 24px monospace';
+    ctx.font = 'bold 22px monospace';
     ctx.textAlign = 'left';
-    ctx.fillText(
-      'XR inputs: ' + snap.raw.length + ' source(s)',
-      20,
-      35,
-    );
-
-    ctx.font = '22px monospace';
+    var srcCount = snap && snap.sources ? snap.sources.length : 0;
+    ctx.fillText('XR inputs: ' + srcCount + ' source(s)', 20, 36);
+    ctx.font = '20px monospace';
     ctx.fillStyle = '#ffffff';
-    var leftLine =
-      'L (' +
-      (snap.left.handedness || '?') +
-      '): axes=' +
-      fmtAxes(snap.left.gp) +
-      ' ' +
-      fmtButtons(snap.left.gp);
-    var rightLine =
-      'R (' +
-      (snap.right.handedness || '?') +
-      '): axes=' +
-      fmtAxes(snap.right.gp) +
-      ' ' +
-      fmtButtons(snap.right.gp);
-    ctx.fillText(leftLine, 20, 90);
-    ctx.fillText(rightLine, 20, 130);
-
-    var ls = readThumbstick(snap.left.gp);
-    var rs = readThumbstick(snap.right.gp);
-    ctx.fillStyle = '#ffd479';
+    var L = snap && snap.left ? snap.left.gamepad : null;
+    var R = snap && snap.right ? snap.right.gamepad : null;
     ctx.fillText(
-      'stick L=(' + ls.x.toFixed(2) + ',' + ls.y.toFixed(2) + ')' +
-        '  R=(' + rs.x.toFixed(2) + ',' + rs.y.toFixed(2) + ')',
+      'L: ' + fmtAxes(L) + '  ' + fmtButtons(L),
       20,
-      175,
+      80,
     );
-
-    ctx.fillStyle = '#aaaaaa';
+    ctx.fillText(
+      'R: ' + fmtAxes(R) + '  ' + fmtButtons(R),
+      20,
+      120,
+    );
+    ctx.fillStyle = '#ffd479';
     ctx.font = '18px monospace';
     ctx.fillText(
-      'Trigger held: ' +
-        (state.xrController0 && state.xrController0.userData.isSelecting ? 'C0 ' : '') +
-        (state.xrController1 && state.xrController1.userData.isSelecting ? 'C1 ' : ''),
+      'walk = left[2,3]   turn/fly = right[2,3]   trigger=btn0   grip=btn1',
       20,
-      215,
+      170,
     );
-
+    ctx.fillStyle = '#aaaaaa';
+    ctx.fillText(
+      'Tip: grip toggles help panel. Press grip again to hide debug.',
+      20,
+      210,
+    );
     state.debugTexture.needsUpdate = true;
   }
 
-  function updateTeleportMarker() {
-    var found = false;
-    var controllers = [state.xrController0, state.xrController1];
-    var i;
-    for (i = 0; i < controllers.length; i++) {
-      var c = controllers[i];
-      if (c && c.userData.isSelecting) {
-        var hit = intersectGround(c);
-        if (hit) {
-          state.teleportMarker.position.copy(hit.point);
-          state.teleportMarker.visible = true;
-          found = true;
-          break;
-        }
-      }
-    }
-    if (!found) state.teleportMarker.visible = false;
+  // ---------- Session lifecycle --------------------------------------------
+
+  function setDesktopControlsEnabled(enabled) {
+    if (state.controls) state.controls.enabled = enabled;
   }
 
   function onSessionStart() {
@@ -571,6 +501,7 @@
     document.body.classList.add('vr-presenting');
     state.contentGroup.rotation.x = -Math.PI / 2;
     state.xrRig.position.set(0, -1.6, 3);
+    state.xrRig.rotation.set(0, 0, 0);
     state.renderer.setPixelRatio(1);
     state.viewer.setVrPointVisibility(true);
 
@@ -585,12 +516,9 @@
   function onSessionEnd() {
     setDesktopControlsEnabled(true);
     document.body.classList.remove('vr-presenting');
-    if (state.controlsHelpTimeout) {
-      clearTimeout(state.controlsHelpTimeout);
-      state.controlsHelpTimeout = null;
-    }
     state.contentGroup.rotation.x = 0;
     state.xrRig.position.set(0, 0, 0);
+    state.xrRig.rotation.set(0, 0, 0);
     state.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     state.viewer.setVrPointVisibility(false);
 
@@ -603,6 +531,8 @@
     if (state.debugPanel) state.debugPanel.visible = false;
   }
 
+  // ---------- Public API ---------------------------------------------------
+
   window.parmanuVr = {
     updateXRStatus: updateXRStatus,
 
@@ -610,77 +540,76 @@
       try {
         state.viewer = viewer;
         state.renderer = viewer.getRenderer();
-      state.camera = viewer.getCamera();
-      state.scene = viewer.getScene();
-      state.contentGroup = viewer.getContentGroup();
-      state.xrRig = viewer.getXrRig();
-      state.controls = viewer.getControls();
+        state.camera = viewer.getCamera();
+        state.scene = viewer.getScene();
+        state.contentGroup = viewer.getContentGroup();
+        state.xrRig = viewer.getXrRig();
+        state.controls = viewer.getControls();
 
-      state.xrGround = new THREE.Mesh(
-        new THREE.PlaneGeometry(2000, 2000),
-        new THREE.MeshBasicMaterial({
-          transparent: true,
-          opacity: 0,
-          side: THREE.DoubleSide,
-        }),
-      );
-      state.xrGround.rotation.x = -Math.PI / 2;
-      state.xrGround.position.set(0, -1.6, 0);
-      state.scene.add(state.xrGround);
+        state.xrGround = new THREE.Mesh(
+          new THREE.PlaneGeometry(2000, 2000),
+          new THREE.MeshBasicMaterial({
+            transparent: true,
+            opacity: 0,
+            side: THREE.DoubleSide,
+          }),
+        );
+        state.xrGround.rotation.x = -Math.PI / 2;
+        state.xrGround.position.set(0, -1.6, 0);
+        state.scene.add(state.xrGround);
 
-      state.teleportMarker = new THREE.Mesh(
-        new THREE.RingGeometry(0.2, 0.3, 32),
-        new THREE.MeshBasicMaterial({
-          color: 0x00ff00,
-          side: THREE.DoubleSide,
-          transparent: true,
-          opacity: 0.7,
-        }),
-      );
-      state.teleportMarker.rotation.x = -Math.PI / 2;
-      state.teleportMarker.visible = false;
-      state.scene.add(state.teleportMarker);
+        state.teleportMarker = new THREE.Mesh(
+          new THREE.RingGeometry(0.2, 0.3, 32),
+          new THREE.MeshBasicMaterial({
+            color: 0x00ff00,
+            side: THREE.DoubleSide,
+            transparent: true,
+            opacity: 0.7,
+          }),
+        );
+        state.teleportMarker.rotation.x = -Math.PI / 2;
+        state.teleportMarker.visible = false;
+        state.scene.add(state.teleportMarker);
 
-      state.gridHelper = new THREE.GridHelper(100, 50, 0x444444, 0x222222);
-      state.gridHelper.position.y = -1.6;
-      state.gridHelper.visible = false;
-      state.scene.add(state.gridHelper);
+        state.gridHelper = new THREE.GridHelper(100, 50, 0x444444, 0x222222);
+        state.gridHelper.position.y = -1.6;
+        state.gridHelper.visible = false;
+        state.scene.add(state.gridHelper);
 
-      state.originMarker = new THREE.Mesh(
-        new THREE.SphereGeometry(0.08, 16, 16),
-        new THREE.MeshBasicMaterial({
-          color: 0x00ffff,
-          transparent: true,
-          opacity: 0.8,
-        }),
-      );
-      state.originMarker.visible = false;
-      state.contentGroup.add(state.originMarker);
+        state.originMarker = new THREE.Mesh(
+          new THREE.SphereGeometry(0.08, 16, 16),
+          new THREE.MeshBasicMaterial({
+            color: 0x00ffff,
+            transparent: true,
+            opacity: 0.8,
+          }),
+        );
+        state.originMarker.visible = false;
+        state.contentGroup.add(state.originMarker);
 
-      state.originLabel = createOriginLabel();
-      state.contentGroup.add(state.originLabel);
+        state.originLabel = createOriginLabel();
+        state.contentGroup.add(state.originLabel);
 
-      state.controlsPanel = createVRControlsPanel();
-      state.xrRig.add(state.controlsPanel);
+        state.controlsPanel = createVRControlsPanel();
+        state.xrRig.add(state.controlsPanel);
 
-      state.vrLegendPanel = createVRLegendPanel();
-      state.xrRig.add(state.vrLegendPanel);
+        state.vrLegendPanel = createVRLegendPanel();
+        state.xrRig.add(state.vrLegendPanel);
 
-      state.debugPanel = createDebugPanel();
-      state.xrRig.add(state.debugPanel);
+        state.debugPanel = createDebugPanel();
+        state.xrRig.add(state.debugPanel);
 
-      state.xrController0 = addXRController(0);
-      state.xrController1 = addXRController(1);
+        addController(0);
+        addController(1);
 
-      state.renderer.xr.addEventListener('sessionstart', onSessionStart);
-      state.renderer.xr.addEventListener('sessionend', onSessionEnd);
+        state.renderer.xr.addEventListener('sessionstart', onSessionStart);
+        state.renderer.xr.addEventListener('sessionend', onSessionEnd);
 
-      if (typeof THREE.VRButton !== 'undefined') {
-        state.vrBtn = THREE.VRButton.createButton(state.renderer);
-        document.body.appendChild(state.vrBtn);
-        setVrButtonReady(false);
-      }
-
+        if (typeof THREE.VRButton !== 'undefined') {
+          state.vrBtn = THREE.VRButton.createButton(state.renderer);
+          document.body.appendChild(state.vrBtn);
+          setVrButtonReady(false);
+        }
       } catch (err) {
         console.error('parmanuVr.init failed:', err);
         setXrStatusHtml(
@@ -708,16 +637,14 @@
 
     updateFrame: function (delta) {
       if (!state.renderer.xr.isPresenting) return;
-      var snap = snapshotInputs();
-      updateXrLocomotion(delta, snap);
-      updateTeleportMarker();
+      var snap = processInputs(delta);
       updateDebugPanel(snap);
       if (state.originLabel && state.originLabel.visible) {
         state.originLabel.lookAt(state.camera.position);
       }
       if (state.originMarker && state.originMarker.visible) {
-        var scale = 1.0 + 0.3 * Math.sin(Date.now() * 0.003);
-        state.originMarker.scale.setScalar(scale);
+        var s = 1.0 + 0.3 * Math.sin(Date.now() * 0.003);
+        state.originMarker.scale.setScalar(s);
       }
     },
 
@@ -725,7 +652,6 @@
       if (state.vrBtn && state.vrBtn.parentNode) {
         state.vrBtn.parentNode.removeChild(state.vrBtn);
       }
-      if (state.controlsHelpTimeout) clearTimeout(state.controlsHelpTimeout);
     },
   };
 
