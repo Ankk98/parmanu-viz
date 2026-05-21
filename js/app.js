@@ -8,17 +8,28 @@
     legend: document.getElementById('legend'),
     datasetSelect: document.getElementById('dataset-select'),
     fileHint: document.getElementById('file-hint'),
-    filePanel: document.getElementById('file-inputs'),
-    bin: document.getElementById('file-bin'),
-    label: document.getElementById('file-label'),
-    calib: document.getElementById('file-calib'),
+    panelKitti: document.getElementById('file-panel-kitti'),
+    panelSit: document.getElementById('file-panel-sit'),
+    kitti: {
+      pointcloud: document.getElementById('kitti-pointcloud'),
+      label: document.getElementById('kitti-label'),
+      calib: document.getElementById('kitti-calib'),
+    },
+    sit: {
+      pointcloud: document.getElementById('sit-pointcloud'),
+      label: document.getElementById('sit-label'),
+      ego: document.getElementById('sit-ego'),
+    },
     visualize: document.getElementById('btn-visualize'),
+    sensorPov: document.getElementById('btn-sensor-pov'),
+    overview: document.getElementById('btn-overview'),
     resetView: document.getElementById('btn-reset-view'),
   };
 
   let datasetId = 'kitti';
   let explorer = null;
   let loader = null;
+  const explorers = {};
 
   function setStatus(msg, isError) {
     els.status.textContent = msg;
@@ -36,6 +47,11 @@
     return;
   }
 
+  if (typeof THREE.PCDLoader === 'undefined') {
+    setStatus('PCDLoader failed to load. Check assets/PCDLoader.js.', true);
+    return;
+  }
+
   try {
     window.viewer.init(els.container);
   } catch (err) {
@@ -44,15 +60,44 @@
     return;
   }
 
+  function applyDatasetUi(id) {
+    const isSit = id === 'sit';
+    els.panelKitti.hidden = isSit;
+    els.panelSit.hidden = !isSit;
+  }
+
+  function clearFileInputs() {
+    els.kitti.pointcloud.value = '';
+    els.kitti.label.value = '';
+    els.kitti.calib.value = '';
+    els.sit.pointcloud.value = '';
+    els.sit.label.value = '';
+    els.sit.ego.value = '';
+  }
+
   function bindExplorer() {
     const entry = DatasetRegistry.get(datasetId);
+    applyDatasetUi(datasetId);
     els.fileHint.textContent = entry.fileHint;
-    explorer = DatasetRegistry.createExplorer(datasetId, {
-      binInput: els.bin,
-      labelInput: els.label,
-      calibInput: els.calib,
-      visualizeBtn: els.visualize,
-    });
+
+    if (!explorers[datasetId]) {
+      if (datasetId === 'sit') {
+        explorers.sit = DatasetRegistry.createExplorer('sit', {
+          pointInput: els.sit.pointcloud,
+          labelInput: els.sit.label,
+          egoInput: els.sit.ego,
+          visualizeBtn: els.visualize,
+        });
+      } else {
+        explorers.kitti = DatasetRegistry.createExplorer('kitti', {
+          pointInput: els.kitti.pointcloud,
+          labelInput: els.kitti.label,
+          calibInput: els.kitti.calib,
+          visualizeBtn: els.visualize,
+        });
+      }
+    }
+    explorer = explorers[datasetId];
     loader = DatasetRegistry.createLoader(datasetId);
   }
 
@@ -105,10 +150,17 @@
 
   function onDatasetChange() {
     datasetId = els.datasetSelect.value;
-    if (explorer && explorer.reset) explorer.reset();
+    clearFileInputs();
     bindExplorer();
+    if (explorer && explorer.reset) explorer.reset();
     els.resetView.disabled = true;
-    setStatus('Dataset: ' + DatasetRegistry.get(datasetId).name + ' — select files, then Visualize');
+    els.sensorPov.disabled = true;
+    els.overview.disabled = true;
+    setStatus(
+      'Dataset: ' +
+        DatasetRegistry.get(datasetId).name +
+        ' — select files, then Visualize',
+    );
   }
 
   els.datasetSelect.addEventListener('change', onDatasetChange);
@@ -130,6 +182,9 @@
           const ms = (performance.now() - t0).toFixed(0);
           updateLegend(scene.boxes);
           els.resetView.disabled = false;
+          els.sensorPov.disabled = false;
+          els.overview.disabled = false;
+          var suffix = files.pointsOnly ? ' (points only)' : '';
           setStatus(
             DatasetRegistry.get(datasetId).name +
               ' · frame ' +
@@ -138,7 +193,9 @@
               stats.numPoints.toLocaleString() +
               ' points, ' +
               stats.numBoxes +
-              ' boxes (' +
+              ' boxes' +
+              suffix +
+              ' (' +
               ms +
               ' ms)',
           );
@@ -157,8 +214,33 @@
     window.viewer.resetView();
   });
 
+  els.sensorPov.addEventListener('click', function () {
+    if (window.viewer.hasScene && window.viewer.hasScene()) {
+      window.viewer.goToSensorPov();
+    }
+  });
+
+  els.overview.addEventListener('click', function () {
+    if (window.viewer.hasScene && window.viewer.hasScene()) {
+      window.viewer.goToOverview();
+    }
+  });
+
   document.addEventListener('keydown', function (e) {
+    if (e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT')) {
+      return;
+    }
     if (e.key === 'r' || e.key === 'R') window.viewer.resetView();
+    if (e.key === 'o' || e.key === 'O') {
+      if (window.viewer.hasScene && window.viewer.hasScene()) {
+        window.viewer.goToSensorPov();
+      }
+    }
+    if (e.key === 'v' || e.key === 'V') {
+      if (window.viewer.hasScene && window.viewer.hasScene()) {
+        window.viewer.goToOverview();
+      }
+    }
   });
 
   setStatus('Dataset: KITTI Object — select files, then Visualize');

@@ -26,9 +26,11 @@
     Car: 0x00ff00,
     Van: 0x88ff00,
     Truck: 0xaaff00,
+    Bus: 0xccaa00,
     Pedestrian: 0x00ffff,
     Person_sitting: 0x00aaff,
     Cyclist: 0xffff00,
+    Motorcyclist: 0xffcc00,
     Tram: 0xffaa00,
     Misc: 0xff00ff,
   };
@@ -50,6 +52,8 @@
     _points: null,
     _boxGroup: null,
     _initialCamera: null,
+    _sceneCenter: null,
+    _sceneMaxDim: 20,
     _animId: null,
 
     init: function (container) {
@@ -73,6 +77,7 @@
       this._controls.target.set(0, 0, 0);
       this._controls.enableDamping = true;
       this._controls.dampingFactor = 0.05;
+      this._configureOrbitLimits(20);
 
       var ambient = new THREE.AmbientLight(0xffffff, 0.6);
       this._scene.add(ambient);
@@ -189,8 +194,23 @@
       return new THREE.CanvasTexture(canvas);
     },
 
-    _fitCamera: function (positions) {
-      if (positions.length === 0) return;
+    /**
+     * Orbit limits aligned with mmdet3d sit_viz_logic.js (render_sit_gt cameraDistance).
+     * @param {number} maxDim — max extent of scene bbox (meters)
+     */
+    _configureOrbitLimits: function (maxDim) {
+      var cameraDistance = Math.max(maxDim * 2.0, 10);
+      this._controls.minDistance = 0.001;
+      this._controls.maxDistance = cameraDistance * 10;
+      this._controls.zoomSpeed = 2.0;
+      this._controls.panSpeed = 0.8;
+      this._controls.rotateSpeed = 0.8;
+      this._camera.near = Math.max(0.001, Math.min(0.01, maxDim * 0.0001));
+      this._camera.far = Math.max(10000, cameraDistance * 20);
+      this._camera.updateProjectionMatrix();
+    },
+
+    _bboxCenter: function (positions) {
       var xmin = Infinity, ymin = Infinity, zmin = Infinity;
       var xmax = -Infinity, ymax = -Infinity, zmax = -Infinity;
       var i;
@@ -205,18 +225,65 @@
         if (y > ymax) ymax = y;
         if (z > zmax) zmax = z;
       }
-      var cx = (xmin + xmax) / 2;
-      var cy = (ymin + ymax) / 2;
-      var cz = (zmin + zmax) / 2;
-      var maxDim = Math.max(xmax - xmin, ymax - ymin, zmax - zmin, 1);
-      var dist = maxDim * 0.85;
-      this._controls.target.set(cx, cy, cz);
-      this._camera.position.set(cx + dist * 0.7, cy + dist * 0.5, cz + dist * 0.6);
+      return {
+        cx: (xmin + xmax) / 2,
+        cy: (ymin + ymax) / 2,
+        cz: (zmin + zmax) / 2,
+        maxDim: Math.max(xmax - xmin, ymax - ymin, zmax - zmin, 1),
+      };
+    },
+
+    /**
+     * Default SiT/MMDet-style view: orbit target at LiDAR origin (0,0,0),
+     * camera placed from scene bbox center — sit_viz_logic.js / render_sit_gt.
+     */
+    _setSitVizCamera: function (cx, cy, cz, maxDim) {
+      var cameraDistance = Math.max(maxDim * 2.0, 10);
+      this._controls.target.set(0, 0, 0);
+      this._camera.position.set(
+        cx + cameraDistance * 0.7,
+        cy + cameraDistance * 0.7,
+        cz + cameraDistance * 0.7,
+      );
       this._controls.update();
+    },
+
+    _fitCamera: function (positions) {
+      if (positions.length === 0) return;
+      var b = this._bboxCenter(positions);
+      this._sceneCenter = { x: b.cx, y: b.cy, z: b.cz };
+      this._sceneMaxDim = b.maxDim;
+      this._configureOrbitLimits(b.maxDim);
+      this._setSitVizCamera(b.cx, b.cy, b.cz, b.maxDim);
       this._initialCamera = {
         position: this._camera.position.clone(),
         target: this._controls.target.clone(),
       };
+    },
+
+    /** Orbit target at cloud center; camera outside (overview). */
+    _setOverviewCamera: function () {
+      var c = this._sceneCenter;
+      if (!c) return;
+      var cameraDistance = Math.max((this._sceneMaxDim || 20) * 2.0, 10);
+      this._controls.target.set(c.x, c.y, c.z);
+      this._camera.position.set(
+        c.x + cameraDistance * 0.7,
+        c.y + cameraDistance * 0.7,
+        c.z + cameraDistance * 0.7,
+      );
+      this._controls.update();
+    },
+
+    /** LiDAR sensor POV — orbit (0,0,0), same as sit_viz_logic.js. */
+    goToSensorPov: function () {
+      var c = this._sceneCenter;
+      if (!c) return;
+      this._setSitVizCamera(c.x, c.y, c.z, this._sceneMaxDim || 20);
+    },
+
+    goToOverview: function () {
+      this._setOverviewCamera();
     },
 
     resetView: function () {
@@ -224,6 +291,10 @@
       this._camera.position.copy(this._initialCamera.position);
       this._controls.target.copy(this._initialCamera.target);
       this._controls.update();
+    },
+
+    hasScene: function () {
+      return !!this._points;
     },
 
     _clearScene: function () {

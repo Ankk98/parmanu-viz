@@ -2,13 +2,15 @@
  * KITTI: three file pickers per frame.
  */
 function createKittiExplorer({
+  pointInput,
   binInput,
   labelInput,
   calibInput,
   visualizeBtn,
   onReadyChange,
 }) {
-  const files = { bin: null, label: null, calib: null };
+  const cloudInput = pointInput || binInput;
+  const files = { point: null, label: null, calib: null };
 
   function stem(name) {
     const m = name.match(/(\d{6})/);
@@ -16,7 +18,7 @@ function createKittiExplorer({
   }
 
   function checkReady() {
-    const ready = !!(files.bin && files.label && files.calib);
+    const ready = !!(files.point && files.label && files.calib);
     visualizeBtn.disabled = !ready;
     if (onReadyChange) onReadyChange(ready, files);
     return ready;
@@ -29,34 +31,34 @@ function createKittiExplorer({
     });
   }
 
-  bind(binInput, 'bin');
+  bind(cloudInput, 'point');
   bind(labelInput, 'label');
   bind(calibInput, 'calib');
 
   return {
     reset() {
-      files.bin = null;
+      files.point = null;
       files.label = null;
       files.calib = null;
-      if (binInput) binInput.value = '';
+      if (cloudInput) cloudInput.value = '';
       if (labelInput) labelInput.value = '';
       if (calibInput) calibInput.value = '';
       checkReady();
     },
 
     getFilesAsync() {
-      if (!files.bin || !files.label || !files.calib) {
+      if (!files.point || !files.label || !files.calib) {
         return Promise.reject(
           new Error('Select point cloud, labels, and calibration files.'),
         );
       }
-      const sBin = stem(files.bin.name);
+      const sPoint = stem(files.point.name);
       const sLabel = stem(files.label.name);
       const sCalib = stem(files.calib.name);
       const mismatch =
-        sBin !== sLabel || sBin !== sCalib
-          ? 'Frame IDs differ: bin=' +
-            sBin +
+        sPoint !== sLabel || sPoint !== sCalib
+          ? 'Frame IDs differ: cloud=' +
+            sPoint +
             ', label=' +
             sLabel +
             ', calib=' +
@@ -69,10 +71,10 @@ function createKittiExplorer({
           );
         }
         return {
-          pointCloudFile: files.bin,
+          pointCloudFile: files.point,
           labelFile: files.label,
           calibFile: files.calib,
-          frameId: sBin,
+          frameId: sPoint,
           mismatch: mismatch,
         };
       });

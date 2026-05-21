@@ -20,23 +20,41 @@
     <p id="file-hint" class="file-hint"></p>
 
     <div id="file-inputs">
-      <label>
-        Point cloud (.bin)
-        <input type="file" id="file-bin" accept=".bin">
-      </label>
-      <label>
-        Labels (label_2 .txt)
-        <input type="file" id="file-label" accept=".txt">
-      </label>
-      <label>
-        Calibration (.txt)
-        <input type="file" id="file-calib" accept=".txt">
-      </label>
+      <div id="file-panel-kitti" class="dataset-file-panel">
+        <label>
+          Point cloud (.bin)
+          <input type="file" id="kitti-pointcloud" accept=".bin">
+        </label>
+        <label>
+          Labels (label_2 .txt)
+          <input type="file" id="kitti-label" accept=".txt">
+        </label>
+        <label>
+          Calibration (.txt)
+          <input type="file" id="kitti-calib" accept=".txt">
+        </label>
+      </div>
+      <div id="file-panel-sit" class="dataset-file-panel" hidden>
+        <label>
+          Point cloud (.pcd, velo/concat)
+          <input type="file" id="sit-pointcloud" accept=".pcd">
+        </label>
+        <label>
+          Labels (label_3d .txt) — optional
+          <input type="file" id="sit-label" accept=".txt">
+        </label>
+        <label>
+          Ego trajectory (.txt)
+          <input type="file" id="sit-ego" accept=".txt">
+        </label>
+      </div>
     </div>
 
     <div class="panel-actions">
       <button type="button" id="btn-visualize" disabled>Visualize</button>
-      <button type="button" id="btn-reset-view" disabled>Reset view</button>
+      <button type="button" id="btn-sensor-pov" disabled title="Orbit LiDAR origin (0,0,0)">Sensor POV</button>
+      <button type="button" id="btn-overview" disabled title="Orbit scene center">Overview</button>
+      <button type="button" id="btn-reset-view" disabled title="Reset to default view">Reset view</button>
     </div>
   </div>
 
@@ -45,7 +63,7 @@
   <div id="hud">
     <div><strong>Controls</strong></div>
     <div>Drag: orbit · Scroll: zoom · Right-drag: pan</div>
-    <div>R: reset view</div>
+    <div>O: sensor POV · V: overview · R: reset view</div>
   </div>
 
   <div id="status">Select a dataset and files, then Visualize</div>
@@ -53,10 +71,12 @@
 
   <script src="assets/three.min.js"></script>
   <script src="assets/OrbitControls.js"></script>
+  <script src="assets/PCDLoader.js"></script>
   <script src="js/viewer.js"></script>
   <script src="js/datasets/registry.js"></script>
   <script src="js/explorer.js"></script>
   <script src="js/datasets/kitti.js"></script>
+  <script src="js/datasets/sit.js"></script>
   <script src="js/app.js"></script>
 </body>
 </html>
