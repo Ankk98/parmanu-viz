@@ -4,12 +4,19 @@
  */
 (function () {
   var VR_HELP_LINES = [
-    'Trigger: point at ground -> Teleport',
-    'Left stick: Walk / Strafe',
-    'Left grip + stick up/down: Height adjust',
-    'Right stick: Look (yaw / pitch)',
-    'Right grip: Toggle help panels',
+    'Trigger: point at floor -> Teleport',
+    'Left stick: Walk / Strafe (body facing)',
+    'Hold left grip + stick up/down: Height',
+    'Right stick: Turn (left/right) / Look up-down',
+    'Hold right grip + stick up/down: Move closer / farther',
+    'Tap right grip (no stick): Toggle help panels',
   ];
+
+  var STICK_DEADZONE = 0.15;
+  var WALK_SPEED = 2.0;
+  var HEIGHT_SPEED = 1.5;
+  var DOLLY_SPEED = 2.5;
+  var ROT_SPEED = 2.0;
 
   var raycaster = new THREE.Raycaster();
   var _tmpMatrix = new THREE.Matrix4();
@@ -17,6 +24,7 @@
   var _right = new THREE.Vector3();
   var _axisX = new THREE.Vector3(1, 0, 0);
   var _worldDir = new THREE.Vector3();
+  var _rigForward = new THREE.Vector3();
 
   var state = {
     viewer: null,
@@ -241,24 +249,95 @@
     return label;
   }
 
+  function refreshControllerGamepad(controller) {
+    var src = controller.userData.inputSource;
+    if (src && src.gamepad) {
+      controller.userData.gamepad = src.gamepad;
+      return;
+    }
+    var pads = navigator.getGamepads && navigator.getGamepads();
+    if (!pads) return;
+    var i;
+    for (i = 0; i < pads.length; i++) {
+      if (pads[i] && pads[i].hand === controller.userData.handedness) {
+        controller.userData.gamepad = pads[i];
+        return;
+      }
+    }
+  }
+
+  /** Quest / Touch: thumbstick is axes[0]=X, axes[1]=Y on each controller gamepad. */
+  function readThumbstick(gp) {
+    if (!gp || !gp.axes || gp.axes.length < 2) {
+      return { x: 0, y: 0 };
+    }
+    var x = gp.axes[0];
+    var y = gp.axes[1];
+    var dz = STICK_DEADZONE;
+    return {
+      x: Math.abs(x) > dz ? x : 0,
+      y: Math.abs(y) > dz ? y : 0,
+    };
+  }
+
+  function isGripHeld(controller) {
+    if (controller.userData.squeezeHeld) return true;
+    var gp = controller.userData.gamepad;
+    if (!gp || !gp.buttons || !gp.buttons[1]) return false;
+    var b = gp.buttons[1];
+    return !!(b.pressed || (b.value != null && b.value > 0.45));
+  }
+
+  function getRigForwardXZ(target) {
+    target.set(0, 0, -1);
+    target.applyQuaternion(state.xrRig.quaternion);
+    target.y = 0;
+    if (target.lengthSq() > 1e-8) {
+      target.normalize();
+    } else {
+      target.set(0, 0, -1);
+    }
+    return target;
+  }
+
+  function getRigRightXZ(target, forward) {
+    target.set(-forward.z, 0, forward.x);
+    return target;
+  }
+
+  function pickController(hand) {
+    var c0 = state.xrController0;
+    var c1 = state.xrController1;
+    if (c0 && c0.userData.handedness === hand) return c0;
+    if (c1 && c1.userData.handedness === hand) return c1;
+    return hand === 'left' ? c0 : c1;
+  }
+
   function addXRController(index) {
     var controller = state.renderer.xr.getController(index);
     controller.userData.index = index;
     controller.userData.isSelecting = false;
     controller.userData.gamepad = null;
     controller.userData.handedness = null;
+    controller.userData.inputSource = null;
+    controller.userData.squeezeHeld = false;
 
     controller.addEventListener('connected', function (event) {
-      controller.userData.gamepad = event.data && event.data.gamepad
-        ? event.data.gamepad
-        : null;
+      controller.userData.inputSource = event.data || null;
+      controller.userData.gamepad =
+        event.data && event.data.gamepad ? event.data.gamepad : null;
       controller.userData.handedness = event.data
         ? event.data.handedness
         : null;
     });
     controller.addEventListener('disconnected', function () {
+      controller.userData.inputSource = null;
       controller.userData.gamepad = null;
       controller.userData.handedness = null;
+      controller.userData.squeezeHeld = false;
+    });
+    controller.addEventListener('squeezeend', function () {
+      controller.userData.squeezeHeld = false;
     });
 
     var lineGeom = new THREE.BufferGeometry();
@@ -286,11 +365,15 @@
       }
     });
     controller.addEventListener('squeezestart', function () {
+      controller.userData.squeezeHeld = true;
       var isRight =
         controller.userData.handedness === 'right' ||
         (controller.userData.handedness !== 'left' &&
           controller.userData.index === 1);
-      if (isRight && state.controlsPanel && state.vrLegendPanel) {
+      if (!isRight || !state.controlsPanel || !state.vrLegendPanel) return;
+      refreshControllerGamepad(controller);
+      var stick = readThumbstick(controller.userData.gamepad);
+      if (Math.abs(stick.x) + Math.abs(stick.y) < STICK_DEADZONE) {
         var vis = !state.controlsPanel.visible;
         state.controlsPanel.visible = vis;
         state.vrLegendPanel.visible = vis;
@@ -313,70 +396,61 @@
   function updateXrLocomotion(delta) {
     if (!state.renderer.xr.isPresenting) return;
 
-    var leftController =
-      state.xrController0 &&
-      state.xrController0.userData.handedness === 'left'
-        ? state.xrController0
-        : state.xrController1 &&
-            state.xrController1.userData.handedness === 'left'
-          ? state.xrController1
-          : state.xrController0;
+    var leftController = pickController('left');
+    var rightController = pickController('right');
+    if (leftController) refreshControllerGamepad(leftController);
+    if (rightController) refreshControllerGamepad(rightController);
 
     var leftGp = leftController && leftController.userData.gamepad;
-    if (leftGp && leftGp.axes && leftGp.axes.length >= 2) {
-      var lx = leftGp.axes[2] != null ? leftGp.axes[2] : leftGp.axes[0];
-      var ly = leftGp.axes[3] != null ? leftGp.axes[3] : leftGp.axes[1];
-      var deadzone = 0.15;
-      var ax = Math.abs(lx) > deadzone ? lx : 0;
-      var ay = Math.abs(ly) > deadzone ? ly : 0;
-      var gripPressed =
-        leftGp.buttons &&
-        leftGp.buttons.length > 1 &&
-        leftGp.buttons[1].pressed;
+    if (leftGp) {
+      var leftStick = readThumbstick(leftGp);
+      var leftGrip = leftController && isGripHeld(leftController);
 
-      if (gripPressed && ay !== 0) {
-        state.xrRig.position.y += ay * 1.0 * delta;
-      } else if (ax !== 0 || ay !== 0) {
-        var speed = 2.0;
-        state.camera.getWorldDirection(_dir);
-        _dir.y = 0;
-        if (_dir.lengthSq() > 1e-6) {
-          _dir.normalize();
-          _right.set(-_dir.z, 0, _dir.x);
-          state.xrRig.position.addScaledVector(_dir, -ay * speed * delta);
-          state.xrRig.position.addScaledVector(_right, ax * speed * delta);
-        }
+      if (leftGrip && leftStick.y !== 0) {
+        state.xrRig.position.y -= leftStick.y * HEIGHT_SPEED * delta;
+      } else if (!leftGrip && (leftStick.x !== 0 || leftStick.y !== 0)) {
+        getRigForwardXZ(_rigForward);
+        getRigRightXZ(_right, _rigForward);
+        state.xrRig.position.addScaledVector(
+          _rigForward,
+          -leftStick.y * WALK_SPEED * delta,
+        );
+        state.xrRig.position.addScaledVector(
+          _right,
+          leftStick.x * WALK_SPEED * delta,
+        );
       }
     }
 
-    var rightController =
-      state.xrController0 &&
-      state.xrController0.userData.handedness === 'right'
-        ? state.xrController0
-        : state.xrController1 &&
-            state.xrController1.userData.handedness === 'right'
-          ? state.xrController1
-          : state.xrController1;
-
     var rightGp = rightController && rightController.userData.gamepad;
-    if (rightGp && rightGp.axes && rightGp.axes.length >= 2) {
-      var rx = rightGp.axes[2] != null ? rightGp.axes[2] : rightGp.axes[0];
-      var ry = rightGp.axes[3] != null ? rightGp.axes[3] : rightGp.axes[1];
-      var dz = 0.15;
-      var rax = Math.abs(rx) > dz ? rx : 0;
-      var ray = Math.abs(ry) > dz ? ry : 0;
-      var rotSpeed = 2.0;
-      if (rax !== 0) {
-        state.xrRig.rotateY(-rax * rotSpeed * delta);
-      }
-      if (ray !== 0) {
-        state.camera.getWorldDirection(_worldDir);
-        var currentPitch = Math.asin(-_worldDir.y);
-        var newPitch = currentPitch + ray * rotSpeed * delta;
-        var maxPitch = Math.PI * 0.44;
-        if (Math.abs(newPitch) < maxPitch) {
-          state.camera.rotateOnAxis(_axisX, ray * rotSpeed * delta);
+    if (rightGp) {
+      var rightStick = readThumbstick(rightGp);
+      var rightGrip = rightController && isGripHeld(rightController);
+
+      if (rightGrip && rightStick.y !== 0) {
+        getRigForwardXZ(_rigForward);
+        state.xrRig.position.addScaledVector(
+          _rigForward,
+          -rightStick.y * DOLLY_SPEED * delta,
+        );
+      } else if (!rightGrip) {
+        if (rightStick.x !== 0) {
+          state.xrRig.rotateY(-rightStick.x * ROT_SPEED * delta);
         }
+        if (rightStick.y !== 0) {
+          state.camera.getWorldDirection(_worldDir);
+          var wy = -_worldDir.y;
+          if (wy > 1) wy = 1;
+          if (wy < -1) wy = -1;
+          var currentPitch = Math.asin(wy);
+          var newPitch = currentPitch + rightStick.y * ROT_SPEED * delta;
+          var maxPitch = Math.PI * 0.44;
+          if (Math.abs(newPitch) < maxPitch) {
+            state.camera.rotateOnAxis(_axisX, rightStick.y * ROT_SPEED * delta);
+          }
+        }
+      } else if (rightGrip && rightStick.x !== 0) {
+        state.xrRig.rotateY(-rightStick.x * ROT_SPEED * delta);
       }
     }
   }

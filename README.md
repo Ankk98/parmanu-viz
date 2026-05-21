@@ -61,11 +61,12 @@ parmanu-viz supports **immersive WebXR** in the Quest Browser (and other WebXR b
 5. Choose the dataset, tap each file input, and pick files from **Download/parmanu/**.
 6. Tap **Visualize**, then tap **Enter VR** (bottom of the view).
 7. Use the controllers:
-   - **Left stick:** walk and strafe
-   - **Left grip + stick up/down:** change height
-   - **Right stick:** turn and look up/down
+   - **Left stick:** walk and strafe (relative to your body facing, not head tilt)
+   - **Hold left grip + stick up/down:** change height
+   - **Right stick:** turn left/right and look up/down
+   - **Hold right grip + stick up/down:** move closer / farther (zoom/dolly)
+   - **Tap right grip** (without moving the stick): show/hide help and legend
    - **Trigger (point at floor):** teleport
-   - **Right grip:** show/hide help and legend panels
 
 ### If “Enter VR” does not appear
 
