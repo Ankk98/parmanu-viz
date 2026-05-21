@@ -541,7 +541,9 @@ Full-frame JSON export (~115k×4 floats) is heavy; defer until v2 with subsampli
 
 ### VR Support (v2+)
 
-Quest 3 / WebXR after desktop MVP is stable. Requires export or live HTTPS and separate performance budget.
+Quest 3 / WebXR after desktop MVP is stable. **Implementation spec:** [VR_SUPPORT_PLAN.md](./VR_SUPPORT_PLAN.md).
+
+**Release order:** ship VR on **Three.js r134** first; upgrading Three to latest stable (e.g. 0.184.x) is a **separate follow-up project**, not part of the VR PR.
 
 ## Browser Compatibility
 
@@ -568,7 +570,9 @@ Quest 3 / WebXR after desktop MVP is stable. Requires export or live HTTPS and s
 
 ### Future Enhancements (v2+)
 
-- WebXR / Quest 3 + standalone HTML export
+- WebXR / Quest 3 — see [VR_SUPPORT_PLAN.md](./VR_SUPPORT_PLAN.md) (before Three.js upgrade)
+- Three.js + addons upgrade to latest stable (separate from VR; see VR plan §Release sequencing)
+- Standalone HTML export
 - KITTI folder browser and auto-pairing across `data_object_*` directories
 - Camera image overlay and 2D bbox projection
 - Pickle file support (if needed)
