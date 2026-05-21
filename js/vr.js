@@ -41,23 +41,73 @@
     legendTexture: null,
   };
 
-  function updateXRStatus() {
+  var xrStatusSettled = false;
+  var xrStatusTimer = null;
+
+  function setXrStatusHtml(html) {
     var el = document.getElementById('xr-status');
-    if (!el) return;
-    if (!('xr' in navigator)) {
-      el.innerHTML =
-        '<strong>WebXR:</strong> not available in this browser';
+    if (el) el.innerHTML = html;
+  }
+
+  function updateXRStatus() {
+    if (xrStatusTimer) {
+      clearTimeout(xrStatusTimer);
+      xrStatusTimer = null;
+    }
+    xrStatusSettled = false;
+
+    if (!window.isSecureContext) {
+      setXrStatusHtml(
+        '<strong>WebXR:</strong> needs HTTPS (or localhost). ' +
+          'Open <a href="https://ankk98.github.io/parmanu-viz/">GitHub Pages</a> for VR, ' +
+          'or use HTTPS on your LAN server.',
+      );
+      xrStatusSettled = true;
       return;
     }
-    navigator.xr.isSessionSupported('immersive-vr').then(function (supported) {
-      if (supported) {
-        el.innerHTML = '<strong>WebXR:</strong> immersive-vr supported';
-      } else {
-        el.innerHTML =
-          '<strong>WebXR:</strong> immersive-vr not supported. ' +
-          'Use HTTPS, Quest Browser, and enable WebXR in chrome://flags';
-      }
-    });
+
+    if (!('xr' in navigator)) {
+      setXrStatusHtml(
+        '<strong>WebXR:</strong> not available in this browser',
+      );
+      xrStatusSettled = true;
+      return;
+    }
+
+    xrStatusTimer = setTimeout(function () {
+      if (xrStatusSettled) return;
+      xrStatusSettled = true;
+      setXrStatusHtml(
+        '<strong>WebXR:</strong> check timed out — use Quest Browser, HTTPS, reload',
+      );
+    }, 8000);
+
+    navigator.xr
+      .isSessionSupported('immersive-vr')
+      .then(function (supported) {
+        if (xrStatusSettled) return;
+        xrStatusSettled = true;
+        if (xrStatusTimer) clearTimeout(xrStatusTimer);
+        if (supported) {
+          setXrStatusHtml(
+            '<strong>WebXR:</strong> immersive-vr supported',
+          );
+        } else {
+          setXrStatusHtml(
+            '<strong>WebXR:</strong> immersive-vr not supported. ' +
+              'Use Quest Browser and enable WebXR in chrome://flags',
+          );
+        }
+      })
+      .catch(function (err) {
+        if (xrStatusSettled) return;
+        xrStatusSettled = true;
+        if (xrStatusTimer) clearTimeout(xrStatusTimer);
+        var msg = err && err.message ? err.message : String(err);
+        setXrStatusHtml(
+          '<strong>WebXR:</strong> check failed (' + msg + ')',
+        );
+      });
   }
 
   function setVrButtonReady(ready) {
@@ -386,9 +436,12 @@
   }
 
   window.parmanuVr = {
+    updateXRStatus: updateXRStatus,
+
     init: function (viewer) {
-      state.viewer = viewer;
-      state.renderer = viewer.getRenderer();
+      try {
+        state.viewer = viewer;
+        state.renderer = viewer.getRenderer();
       state.camera = viewer.getCamera();
       state.scene = viewer.getScene();
       state.contentGroup = viewer.getContentGroup();
@@ -457,6 +510,14 @@
         setVrButtonReady(false);
       }
 
+      } catch (err) {
+        console.error('parmanuVr.init failed:', err);
+        setXrStatusHtml(
+          '<strong>WebXR:</strong> VR init failed — ' +
+            (err && err.message ? err.message : err),
+        );
+        return;
+      }
       updateXRStatus();
     },
 
@@ -494,4 +555,13 @@
       if (state.controlsHelpTimeout) clearTimeout(state.controlsHelpTimeout);
     },
   };
+
+  function bootXrStatus() {
+    updateXRStatus();
+  }
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', bootXrStatus);
+  } else {
+    bootXrStatus();
+  }
 })();

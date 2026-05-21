@@ -63,6 +63,11 @@
 
   if (typeof window.parmanuVr === 'undefined') {
     console.warn('parmanu-viz: js/vr.js not loaded; VR disabled');
+    var xrEl = document.getElementById('xr-status');
+    if (xrEl) {
+      xrEl.innerHTML =
+        '<strong>WebXR:</strong> VR module failed to load (check js/vr.js)';
+    }
   } else {
     window.parmanuVr.init(window.viewer);
     window.parmanuVr.setSceneReady(false);

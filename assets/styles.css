@@ -218,6 +218,11 @@ h1 {
 #xr-status {
   margin-top: 6px;
   opacity: 0.9;
+  pointer-events: auto;
+}
+
+#xr-status a {
+  color: #8ec8ff;
 }
 
 body.vr-presenting #file-panel,
