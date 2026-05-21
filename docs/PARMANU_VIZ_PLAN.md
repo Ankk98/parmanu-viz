@@ -593,7 +593,7 @@ Quest 3 / WebXR after desktop MVP is stable. Requires export or live HTTPS and s
 
 ## Open Source Considerations
 
-- **License**: MIT or Apache 2.0 (TBD)
+- **License**: MIT (see `LICENSE`)
 - **Repository**: GitHub (public)
 - **Documentation**: Comprehensive README + CONTRIBUTING guide
 - **Examples**: Sample dataset loaders for common formats
@@ -659,4 +659,4 @@ See `CONTRIBUTING.md` for detailed guidelines.
 **Project Name**: parmanu-viz  
 **Version**: 1.0.0 (planned)  
 **Status**: Planning Phase (v1 = desktop; reference clones in `.reference/`)  
-**License**: TBD (MIT/Apache 2.0)
+**License**: MIT

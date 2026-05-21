@@ -1,8 +1,11 @@
 # parmanu-viz
 
-Browser-based 3D visualization for KITTI Velodyne point clouds and `label_2` annotations.
+Browser-based visualizer for 3D point clouds with annotations.
 
-**No server.** Open `index.html` in Chrome or Firefox (double-click or `file://`).
+**No server required.** Open `index.html` in Chrome or Firefox (double-click or `file://`).
+
+## Supported Datasets
+- KITTI
 
 ## Usage
 
@@ -43,4 +46,4 @@ Ported from the [KITTI object devkit](https://github.com/bostondiditeam/kitti) /
 
 ## License
 
-TBD
+MIT — see [LICENSE](LICENSE).
