@@ -1,33 +1,45 @@
 # parmanu-viz
 
-Browser-based 3D visualization for KITTI Velodyne point clouds and `label_2` annotations (desktop v1).
+Browser-based 3D visualization for KITTI Velodyne point clouds and `label_2` annotations.
 
-## Quick start
+**No server.** Open `index.html` in Chrome or Firefox (double-click or `file://`).
 
-```bash
-cd parmanu-viz
-python -m http.server 8000
-```
+## Usage
 
-Open http://localhost:8000 (use a local server; `file://` will not work).
+1. Open `index.html` in your browser.
+2. Select three files for the same frame (e.g. `000001`):
+   - `data_object_velodyne/training/velodyne/000001.bin`
+   - `data_object_label_2/training/label_2/000001.txt`
+   - `data_object_calib/training/calib/000001.txt`
+3. Click **Visualize**.
 
-## Load one frame
+Controls: drag to orbit, scroll to zoom, right-drag to pan, **R** to reset view.
 
-Pick three files with the same frame id (e.g. `000042`):
+## Files
 
-| File | Typical path |
-|------|----------------|
-| Point cloud | `data_object_velodyne/training/velodyne/000042.bin` |
-| Labels | `data_object_label_2/training/label_2/000042.txt` |
-| Calibration | `data_object_calib/training/calib/000042.txt` |
+| Script | Role |
+|--------|------|
+| `assets/three.min.js` | Three.js (global `THREE`) |
+| `assets/OrbitControls.js` | Orbit controls |
+| `js/datasets/registry.js` | Dataset registry + selector |
+| `js/datasets/kitti.js` | KITTI parsers + box math (registers itself) |
+| `js/viewer.js` | Point cloud + 3D boxes |
+| `js/explorer.js` | File pickers |
+| `js/app.js` | Wiring |
 
-Click **Visualize**.
+Plain `<script>` tags — no npm, no build, no ES modules.
 
-## Stack
+### Add another dataset
 
-- Pure HTML + ES modules
-- Three.js (bundled under `assets/`)
-- KITTI box math ported from the [KITTI object devkit](https://github.com/bostondiditeam/kitti) / [kitti_object_vis](https://github.com/kuixu/kitti_object_vis)
+1. Add `js/datasets/waymo.js` with `WaymoLoader` and `loadFrame()` returning `{ points, boxes }`.
+2. Register in that file: `DatasetRegistry.register('waymo', { name, fileHint, Loader, createExplorer })`.
+3. Add `<script src="js/datasets/waymo.js"></script>` to `index.html` after `kitti.js`.
+
+The **Dataset** dropdown updates automatically.
+
+## KITTI math
+
+Ported from the [KITTI object devkit](https://github.com/bostondiditeam/kitti) / [kitti_object_vis](https://github.com/kuixu/kitti_object_vis). Optional local clones under `.reference/` for development only.
 
 ## License
 

@@ -3,33 +3,37 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>parmanu-viz — KITTI</title>
+  <title>parmanu-viz</title>
   <link rel="stylesheet" href="assets/styles.css">
-  <script type="importmap">
-  {
-    "imports": {
-      "three": "./assets/three.module.js",
-      "three/addons/": "./assets/"
-    }
-  }
-  </script>
 </head>
 <body>
   <div id="file-panel">
     <h1>parmanu-viz</h1>
-    <p class="subtitle">KITTI frame viewer (desktop v1)</p>
-    <label>
-      Point cloud (.bin)
-      <input type="file" id="file-bin" accept=".bin">
+    <p class="subtitle">Open this file directly — no server</p>
+
+    <label class="dataset-label">
+      Dataset
+      <select id="dataset-select" aria-label="Dataset type">
+        <option value="kitti" selected>KITTI Object</option>
+      </select>
     </label>
-    <label>
-      Labels (label_2 .txt)
-      <input type="file" id="file-label" accept=".txt">
-    </label>
-    <label>
-      Calibration (.txt)
-      <input type="file" id="file-calib" accept=".txt">
-    </label>
+    <p id="file-hint" class="file-hint"></p>
+
+    <div id="file-inputs">
+      <label>
+        Point cloud (.bin)
+        <input type="file" id="file-bin" accept=".bin">
+      </label>
+      <label>
+        Labels (label_2 .txt)
+        <input type="file" id="file-label" accept=".txt">
+      </label>
+      <label>
+        Calibration (.txt)
+        <input type="file" id="file-calib" accept=".txt">
+      </label>
+    </div>
+
     <div class="panel-actions">
       <button type="button" id="btn-visualize" disabled>Visualize</button>
       <button type="button" id="btn-reset-view" disabled>Reset view</button>
@@ -44,9 +48,15 @@
     <div>R: reset view</div>
   </div>
 
-  <div id="status">Select three files, then Visualize</div>
+  <div id="status">Select a dataset and files, then Visualize</div>
   <div id="legend"></div>
 
-  <script type="module" src="js/app.js"></script>
+  <script src="assets/three.min.js"></script>
+  <script src="assets/OrbitControls.js"></script>
+  <script src="js/viewer.js"></script>
+  <script src="js/datasets/registry.js"></script>
+  <script src="js/explorer.js"></script>
+  <script src="js/datasets/kitti.js"></script>
+  <script src="js/app.js"></script>
 </body>
 </html>

@@ -2,158 +2,145 @@
  * KITTI object detection loader (v1).
  * Box/calib math ported from KITTI devkit / kitti_object_vis (kitti_util.py).
  */
-import { DatasetLoader } from './base.js';
-
-const BOX_EDGES = [
-  [0, 1], [1, 2], [2, 3], [3, 0],
-  [4, 5], [5, 6], [6, 7], [7, 4],
-  [0, 4], [1, 5], [2, 6], [3, 7],
-];
-
-export class KITTILoader extends DatasetLoader {
-  getName() {
-    return 'KITTI';
-  }
-
-  async loadFrame({ pointCloudFile, labelFile, calibFile }) {
-    const points = this.parseBin(await pointCloudFile.arrayBuffer());
-    const calib = this.parseCalib(await calibFile.text());
-    const objects = this.parseLabels(await labelFile.text()).filter((o) =>
-      this.isValid3DBox(o),
-    );
-    const boxes = [];
-    for (const obj of objects) {
-      const corners = this.boxToVelodyneCorners(obj, calib);
-      if (corners) boxes.push({ type: obj.type, corners });
-    }
-    return { points, boxes, annotations: objects };
-  }
-
-  parseBin(buffer) {
-    const floats = new Float32Array(buffer);
-    if (floats.length % 4 !== 0) {
-      throw new Error(
-        `Invalid .bin size ${floats.length} floats (must be multiple of 4)`,
-      );
-    }
-    return floats;
-  }
-
-  parseCalib(text) {
-    const data = {};
-    for (const line of text.split('\n')) {
-      const trimmed = line.trim();
-      if (!trimmed || !trimmed.includes(':')) continue;
-      const [key, rest] = trimmed.split(':', 2);
-      const vals = rest.trim().split(/\s+/).map(Number);
-      data[key.trim()] = vals;
-    }
-    for (const req of ['P2', 'R0_rect', 'Tr_velo_to_cam']) {
-      if (!data[req]) {
-        throw new Error(`Calibration missing required key: ${req}`);
-      }
-    }
-    const P = reshape(data.P2, 3, 4);
-    const V2C = reshape(data.Tr_velo_to_cam, 3, 4);
-    const R0 = reshape(data.R0_rect, 3, 3);
-    const C2V = inverseRigid(V2C);
-    const R0inv = invert3x3(R0);
-    return { P, V2C, R0, C2V, R0inv };
-  }
-
-  parseLabels(text) {
-    return text
-      .trim()
-      .split('\n')
-      .map((line) => this.parseLabelLine(line))
-      .filter(Boolean);
-  }
-
-  parseLabelLine(line) {
-    const parts = line.trim().split(/\s+/);
-    if (parts.length < 15) return null;
-    return {
-      type: parts[0],
-      truncated: parseFloat(parts[1]),
-      occluded: parseInt(parts[2], 10),
-      alpha: parseFloat(parts[3]),
-      bbox_2d: parts.slice(4, 8).map(Number),
-      h: parseFloat(parts[8]),
-      w: parseFloat(parts[9]),
-      l: parseFloat(parts[10]),
-      t: [parseFloat(parts[11]), parseFloat(parts[12]), parseFloat(parts[13])],
-      ry: parseFloat(parts[14]),
-    };
-  }
-
-  isValid3DBox(o) {
-    if (o.type === 'DontCare') return false;
-    if (o.h <= 0 || o.w <= 0 || o.l <= 0) return false;
-    if (o.t[0] <= -999 || o.t[1] <= -999 || o.t[2] <= -999) return false;
-    return true;
-  }
-
-  boxToVelodyneCorners(obj, calib) {
-    const cornersRect = this.computeBox3d(obj);
-    if (!cornersRect) return null;
-    return this.projectRectToVelo(cornersRect, calib);
-  }
-
-  /** 8×3 corners in rectified camera coordinates */
-  computeBox3d(obj) {
-    const R = roty(obj.ry);
-    const l = obj.l;
-    const w = obj.w;
-    const h = obj.h;
-    const x_corners = [l / 2, l / 2, -l / 2, -l / 2, l / 2, l / 2, -l / 2, -l / 2];
-    const y_corners = [0, 0, 0, 0, -h, -h, -h, -h];
-    const z_corners = [w / 2, -w / 2, -w / 2, w / 2, w / 2, -w / 2, -w / 2, w / 2];
-
-    const corners = [[], [], []];
-    for (let i = 0; i < 8; i++) {
-      const p = [
-        x_corners[i],
-        y_corners[i],
-        z_corners[i],
-      ];
-      const rp = mat3Vec(R, p);
-      corners[0].push(rp[0] + obj.t[0]);
-      corners[1].push(rp[1] + obj.t[1]);
-      corners[2].push(rp[2] + obj.t[2]);
-    }
-
-    for (let i = 0; i < 8; i++) {
-      if (corners[2][i] < 0.1) return null;
-    }
-
-    const out = [];
-    for (let i = 0; i < 8; i++) {
-      out.push([corners[0][i], corners[1][i], corners[2][i]]);
-    }
-    return out;
-  }
-
-  projectRectToVelo(cornersRect, calib) {
-    const out = [];
-    for (const p of cornersRect) {
-      const pref = mat3Vec(calib.R0inv, p);
-      const pvelo = rigid3x4(calib.C2V, pref);
-      out.push(pvelo);
-    }
-    return out;
-  }
-
-  static cornersToLinePositions(corners) {
-    const positions = [];
-    for (const [a, b] of BOX_EDGES) {
-      positions.push(
-        corners[a][0], corners[a][1], corners[a][2],
-        corners[b][0], corners[b][1], corners[b][2],
-      );
-    }
-    return new Float32Array(positions);
-  }
+function KITTILoader() {
 }
+
+KITTILoader.prototype.getName = function () {
+  return 'KITTI';
+};
+
+KITTILoader.prototype.loadFrame = async function ({
+  pointCloudFile,
+  labelFile,
+  calibFile,
+}) {
+  const points = this.parseBin(await pointCloudFile.arrayBuffer());
+  const calib = this.parseCalib(await calibFile.text());
+  const objects = this.parseLabels(await labelFile.text()).filter((o) =>
+    this.isValid3DBox(o),
+  );
+  const boxes = [];
+  for (const obj of objects) {
+    const corners = this.boxToVelodyneCorners(obj, calib);
+    if (corners) boxes.push({ type: obj.type, corners: corners });
+  }
+  return { points: points, boxes: boxes, annotations: objects };
+};
+
+KITTILoader.prototype.parseBin = function (buffer) {
+  const floats = new Float32Array(buffer);
+  if (floats.length % 4 !== 0) {
+    throw new Error(
+      'Invalid .bin size ' + floats.length + ' floats (must be multiple of 4)',
+    );
+  }
+  return floats;
+};
+
+KITTILoader.prototype.parseCalib = function (text) {
+  const data = {};
+  const lines = text.split('\n');
+  for (let i = 0; i < lines.length; i++) {
+    const trimmed = lines[i].trim();
+    if (!trimmed || trimmed.indexOf(':') === -1) continue;
+    const parts = trimmed.split(':');
+    const key = parts[0].trim();
+    const vals = parts[1].trim().split(/\s+/).map(Number);
+    data[key] = vals;
+  }
+  for (let j = 0; j < ['P2', 'R0_rect', 'Tr_velo_to_cam'].length; j++) {
+    const req = ['P2', 'R0_rect', 'Tr_velo_to_cam'][j];
+    if (!data[req]) {
+      throw new Error('Calibration missing required key: ' + req);
+    }
+  }
+  const P = reshape(data.P2, 3, 4);
+  const V2C = reshape(data.Tr_velo_to_cam, 3, 4);
+  const R0 = reshape(data.R0_rect, 3, 3);
+  const C2V = inverseRigid(V2C);
+  const R0inv = invert3x3(R0);
+  return { P: P, V2C: V2C, R0: R0, C2V: C2V, R0inv: R0inv };
+};
+
+KITTILoader.prototype.parseLabels = function (text) {
+  const lines = text.trim().split('\n');
+  const out = [];
+  for (let i = 0; i < lines.length; i++) {
+    const o = this.parseLabelLine(lines[i]);
+    if (o) out.push(o);
+  }
+  return out;
+};
+
+KITTILoader.prototype.parseLabelLine = function (line) {
+  const parts = line.trim().split(/\s+/);
+  if (parts.length < 15) return null;
+  return {
+    type: parts[0],
+    truncated: parseFloat(parts[1]),
+    occluded: parseInt(parts[2], 10),
+    alpha: parseFloat(parts[3]),
+    bbox_2d: parts.slice(4, 8).map(Number),
+    h: parseFloat(parts[8]),
+    w: parseFloat(parts[9]),
+    l: parseFloat(parts[10]),
+    t: [parseFloat(parts[11]), parseFloat(parts[12]), parseFloat(parts[13])],
+    ry: parseFloat(parts[14]),
+  };
+};
+
+KITTILoader.prototype.isValid3DBox = function (o) {
+  if (o.type === 'DontCare') return false;
+  if (o.h <= 0 || o.w <= 0 || o.l <= 0) return false;
+  if (o.t[0] <= -999 || o.t[1] <= -999 || o.t[2] <= -999) return false;
+  return true;
+};
+
+KITTILoader.prototype.boxToVelodyneCorners = function (obj, calib) {
+  const cornersRect = this.computeBox3d(obj);
+  if (!cornersRect) return null;
+  return this.projectRectToVelo(cornersRect, calib);
+};
+
+KITTILoader.prototype.computeBox3d = function (obj) {
+  const R = roty(obj.ry);
+  const l = obj.l;
+  const w = obj.w;
+  const h = obj.h;
+  const x_corners = [l / 2, l / 2, -l / 2, -l / 2, l / 2, l / 2, -l / 2, -l / 2];
+  const y_corners = [0, 0, 0, 0, -h, -h, -h, -h];
+  const z_corners = [w / 2, -w / 2, -w / 2, w / 2, w / 2, -w / 2, -w / 2, w / 2];
+
+  const corners = [[], [], []];
+  for (let i = 0; i < 8; i++) {
+    const p = [x_corners[i], y_corners[i], z_corners[i]];
+    const rp = mat3Vec(R, p);
+    corners[0].push(rp[0] + obj.t[0]);
+    corners[1].push(rp[1] + obj.t[1]);
+    corners[2].push(rp[2] + obj.t[2]);
+  }
+
+  for (let i = 0; i < 8; i++) {
+    if (corners[2][i] < 0.1) return null;
+  }
+
+  const out = [];
+  for (let i = 0; i < 8; i++) {
+    out.push([corners[0][i], corners[1][i], corners[2][i]]);
+  }
+  return out;
+};
+
+KITTILoader.prototype.projectRectToVelo = function (cornersRect, calib) {
+  const out = [];
+  for (let i = 0; i < cornersRect.length; i++) {
+    const p = cornersRect[i];
+    const pref = mat3Vec(calib.R0inv, p);
+    const pvelo = rigid3x4(calib.C2V, pref);
+    out.push(pvelo);
+  }
+  return out;
+};
 
 function reshape(arr, rows, cols) {
   const m = [];
@@ -236,3 +223,19 @@ function rigid3x4(Tr, p) {
     Tr[2][0] * p[0] + Tr[2][1] * p[1] + Tr[2][2] * p[2] + Tr[2][3],
   ];
 }
+
+window.KITTILoader = KITTILoader;
+
+function registerKittiDataset() {
+  DatasetRegistry.register('kitti', {
+    name: 'KITTI Object',
+    fileHint: 'velodyne .bin + label_2 .txt + calib .txt (same frame id)',
+    Loader: KITTILoader,
+    createExplorer: function (opts) {
+      return createKittiExplorer(opts);
+    },
+  });
+}
+
+window.registerKittiDataset = registerKittiDataset;
+registerKittiDataset();

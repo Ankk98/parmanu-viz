@@ -1,7 +1,7 @@
 /**
- * v1: three file pickers for KITTI frame.
+ * KITTI: three file pickers per frame.
  */
-export function createExplorer({
+function createKittiExplorer({
   binInput,
   labelInput,
   calibInput,
@@ -23,8 +23,8 @@ export function createExplorer({
   }
 
   function bind(input, key) {
-    input.addEventListener('change', () => {
-      files[key] = input.files?.[0] ?? null;
+    input.addEventListener('change', function () {
+      files[key] = input.files && input.files[0] ? input.files[0] : null;
       checkReady();
     });
   }
@@ -34,33 +34,50 @@ export function createExplorer({
   bind(calibInput, 'calib');
 
   return {
-    getFiles() {
+    reset() {
+      files.bin = null;
+      files.label = null;
+      files.calib = null;
+      if (binInput) binInput.value = '';
+      if (labelInput) labelInput.value = '';
+      if (calibInput) calibInput.value = '';
+      checkReady();
+    },
+
+    getFilesAsync() {
       if (!files.bin || !files.label || !files.calib) {
-        throw new Error('Select point cloud, labels, and calibration files.');
+        return Promise.reject(
+          new Error('Select point cloud, labels, and calibration files.'),
+        );
       }
       const sBin = stem(files.bin.name);
       const sLabel = stem(files.label.name);
       const sCalib = stem(files.calib.name);
       const mismatch =
         sBin !== sLabel || sBin !== sCalib
-          ? `Frame IDs differ: bin=${sBin}, label=${sLabel}, calib=${sCalib}`
+          ? 'Frame IDs differ: bin=' +
+            sBin +
+            ', label=' +
+            sLabel +
+            ', calib=' +
+            sCalib
           : null;
-      return {
-        pointCloudFile: files.bin,
-        labelFile: files.label,
-        calibFile: files.calib,
-        frameId: sBin,
-        mismatch,
-      };
-    },
-
-    async validateCalib(file) {
-      const text = await file.text();
-      if (!text.includes('Tr_velo_to_cam:')) {
-        throw new Error(
-          'Calibration file must contain Tr_velo_to_cam (did you pick label_2 by mistake?)',
-        );
-      }
+      return files.calib.text().then(function (text) {
+        if (!text.includes('Tr_velo_to_cam:')) {
+          throw new Error(
+            'Calibration file must contain Tr_velo_to_cam (did you pick label_2 by mistake?)',
+          );
+        }
+        return {
+          pointCloudFile: files.bin,
+          labelFile: files.label,
+          calibFile: files.calib,
+          frameId: sBin,
+          mismatch: mismatch,
+        };
+      });
     },
   };
 }
+
+window.createKittiExplorer = createKittiExplorer;
