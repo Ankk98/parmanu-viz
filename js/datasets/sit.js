@@ -1,6 +1,7 @@
 /**
  * SiT dataset loader — raw .pcd + optional label_3d + ego_trajectory.
- * Point clouds via THREE.PCDLoader (r134); boxes in LiDAR frame after ego transform.
+ * Box math follows SiT-Dataset detection/FCOS3D/visualize_3dbox_on_image.py
+ * (not sit_converter.py — that path swaps h,l,w for training).
  */
 function SitLoader() {}
 
@@ -16,16 +17,23 @@ SitLoader.prototype.loadFrame = async function (files) {
     return { points: points, boxes: [], annotations: [] };
   }
 
-  if (!files.egoFile) {
-    throw new Error('SiT: select ego_trajectory when label_3d is provided.');
+  const raw = parseSitLabel3d(await files.labelFile.text());
+  let boxes7 = raw.map(function (o) {
+    return o.box7.slice();
+  });
+
+  if (files.skipEgoTransform) {
+    boxes7 = applySitLabelYawFlip(boxes7);
+  } else {
+    if (!files.egoFile) {
+      throw new Error(
+        'SiT: select ego_trajectory, or enable “Skip ego transform”.',
+      );
+    }
+    const ego = parseEgoMatrix(await files.egoFile.text());
+    boxes7 = transformBoxesOfficialVisualize(boxes7, ego);
   }
 
-  const ego = parseEgoMatrix(await files.egoFile.text());
-  const raw = parseSitLabel3d(await files.labelFile.text());
-  const box7List = raw.map(function (o) {
-    return o.box7;
-  });
-  const boxes7 = transformBoxesWorldToLidar(box7List, ego);
   const boxes = [];
   for (let i = 0; i < boxes7.length; i++) {
     boxes.push({
@@ -66,6 +74,10 @@ function mapSitClass(name) {
   return name;
 }
 
+/**
+ * label_3d line: class token h l w x y z rot
+ * visualize_3dbox_on_image.py uses gt_boxes = (x, y, z, l, w, h, rot) from file.
+ */
 function parseSitLabel3d(text) {
   const out = [];
   const lines = text.trim().split('\n');
@@ -81,7 +93,6 @@ function parseSitLabel3d(text) {
       }
       throw new Error('SiT label_3d: expected 9 fields, got ' + p.length);
     }
-    // Official README / sit_converter: fields 2–4 are h, l, w (not h, w, l).
     const h = parseFloat(p[2]);
     const l = parseFloat(p[3]);
     const w = parseFloat(p[4]);
@@ -92,8 +103,7 @@ function parseSitLabel3d(text) {
     out.push({
       type: mapSitClass(p[0]),
       instance_token: p[1],
-      // box_center_to_corner_3d uses l,w,h = dims[0..2] after h,l,w -> w,l,h reorder.
-      box7: [x, y, z, w, l, h, yaw],
+      box7: [x, y, z, l, w, h, yaw],
     });
   }
   return out;
@@ -116,6 +126,12 @@ function parseEgoMatrix(text) {
     [vals[8], vals[9], vals[10], vals[11]],
     [vals[12], vals[13], vals[14], vals[15]],
   ];
+}
+
+function egoYaw(ego) {
+  const sy = Math.hypot(ego[0][0], ego[1][0]);
+  if (sy < 1e-6) return 0;
+  return Math.atan2(ego[1][0], ego[0][0]);
 }
 
 function invert4x4(m) {
@@ -180,36 +196,43 @@ function mul4x4Vec(m, v) {
   ];
 }
 
-function transformYawWorldToLidar(yaw, inv) {
-  const c = Math.cos(yaw);
-  const s = Math.sin(yaw);
-  const vx =
-    inv[0][0] * c + inv[0][1] * s;
-  const vy =
-    inv[1][0] * c + inv[1][1] * s;
-  return Math.atan2(vy, vx);
+/**
+ * Official visualize_3dbox_on_image.py world→LiDAR for 3D corners:
+ * inv(ego) on center, yaw += ego_yaw, yaw *= -1.
+ */
+function transformBoxesOfficialVisualize(boxes, ego) {
+  const out = [];
+  const ey = egoYaw(ego);
+  const inv = invert4x4(ego);
+  for (let i = 0; i < boxes.length; i++) {
+    const b = boxes[i].slice();
+    const q = mul4x4Vec(inv, [b[0], b[1], b[2], 1]);
+    b[0] = q[0];
+    b[1] = q[1];
+    b[2] = q[2];
+    b[6] += ey;
+    b[6] *= -1;
+    b[6] = ((b[6] + Math.PI) % (2 * Math.PI)) - Math.PI;
+    out.push(b);
+  }
+  return out;
 }
 
-function transformBoxesWorldToLidar(boxes, ego) {
+/** Skip ego: still apply label yaw sign used after transform in official viz. */
+function applySitLabelYawFlip(boxes) {
   const out = [];
   for (let i = 0; i < boxes.length; i++) {
-    out.push(boxes[i].slice());
-  }
-  const inv = invert4x4(ego);
-  for (let b = 0; b < out.length; b++) {
-    const q = mul4x4Vec(inv, [out[b][0], out[b][1], out[b][2], 1]);
-    out[b][0] = q[0];
-    out[b][1] = q[1];
-    out[b][2] = q[2];
-    out[b][6] = transformYawWorldToLidar(out[b][6], inv);
-    out[b][6] = ((out[b][6] + Math.PI) % (2 * Math.PI)) - Math.PI;
+    const b = boxes[i].slice();
+    b[6] *= -1;
+    b[6] = ((b[6] + Math.PI) % (2 * Math.PI)) - Math.PI;
+    out.push(b);
   }
   return out;
 }
 
 /**
- * Box wireframe corners — ports SiT-Dataset sit_converter.box_center_to_corner_3d_
- * (l along x, w along y, z-yaw, geometric center with z from -h/2 to +h/2).
+ * LiDAR box corners — geometric center at (x,y,z), ±h/2 on z.
+ * Same as detection/FCOS3D/visualize_3dbox_on_image.py box_center_to_corner_3d_.
  */
 function box7ToCorners(box) {
   const x = box[0];
@@ -247,6 +270,7 @@ function createSitExplorer({
   pointInput,
   labelInput,
   egoInput,
+  skipEgoInput,
   visualizeBtn,
 }) {
   const files = { point: null, label: null, ego: null };
@@ -259,9 +283,13 @@ function createSitExplorer({
     return !!files.label;
   }
 
+  function skipEgo() {
+    return !!(skipEgoInput && skipEgoInput.checked);
+  }
+
   function checkReady() {
     let ready = !!files.point;
-    if (hasLabels()) {
+    if (hasLabels() && !skipEgo()) {
       ready = ready && !!files.ego;
     }
     visualizeBtn.disabled = !ready;
@@ -278,6 +306,9 @@ function createSitExplorer({
   bind(pointInput, 'point');
   bind(labelInput, 'label');
   bind(egoInput, 'ego');
+  if (skipEgoInput) {
+    skipEgoInput.addEventListener('change', checkReady);
+  }
 
   return {
     reset() {
@@ -325,6 +356,7 @@ function createSitExplorer({
         frameId: sPoint,
         mismatch: mismatch,
         pointsOnly: pointsOnly,
+        skipEgoTransform: skipEgo(),
       };
 
       if (!files.label) {
@@ -348,9 +380,14 @@ function createSitExplorer({
             );
           }
         }
+        if (skipEgo()) {
+          return payload;
+        }
         if (!files.ego) {
           return Promise.reject(
-            new Error('SiT: select ego_trajectory when label_3d is provided.'),
+            new Error(
+              'SiT: select ego_trajectory, or enable “Skip ego transform”.',
+            ),
           );
         }
         return files.ego.text().then(function (egoText) {
@@ -369,7 +406,7 @@ function registerSitDataset() {
   DatasetRegistry.register('sit', {
     name: 'SiT',
     fileHint:
-      'velo/concat .pcd; optional label_3d + ego_trajectory (same frame id)',
+      'velo/concat .pcd + label_3d; ego_trajectory unless “skip ego” (official viz math)',
     Loader: SitLoader,
     createExplorer: function (opts) {
       return createSitExplorer(opts);

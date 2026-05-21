@@ -19,6 +19,7 @@
       pointcloud: document.getElementById('sit-pointcloud'),
       label: document.getElementById('sit-label'),
       ego: document.getElementById('sit-ego'),
+      skipEgo: document.getElementById('sit-skip-ego'),
     },
     visualize: document.getElementById('btn-visualize'),
     sensorPov: document.getElementById('btn-sensor-pov'),
@@ -73,6 +74,7 @@
     els.sit.pointcloud.value = '';
     els.sit.label.value = '';
     els.sit.ego.value = '';
+    if (els.sit.skipEgo) els.sit.skipEgo.checked = false;
   }
 
   function bindExplorer() {
@@ -86,6 +88,7 @@
           pointInput: els.sit.pointcloud,
           labelInput: els.sit.label,
           egoInput: els.sit.ego,
+          skipEgoInput: els.sit.skipEgo,
           visualizeBtn: els.visualize,
         });
       } else {
@@ -185,6 +188,11 @@
           els.sensorPov.disabled = false;
           els.overview.disabled = false;
           var suffix = files.pointsOnly ? ' (points only)' : '';
+          if (files.skipEgoTransform && !files.pointsOnly) {
+            suffix += ' · skip ego (yaw flip only)';
+          } else if (!files.pointsOnly && datasetId === 'sit') {
+            suffix += ' · official viz transform';
+          }
           setStatus(
             DatasetRegistry.get(datasetId).name +
               ' · frame ' +

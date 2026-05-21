@@ -44,8 +44,12 @@
           <input type="file" id="sit-label" accept=".txt">
         </label>
         <label>
-          Ego trajectory (.txt)
+          Ego trajectory (.txt) — optional if skipping transform
           <input type="file" id="sit-ego" accept=".txt">
+        </label>
+        <label class="sit-skip-ego">
+          <input type="checkbox" id="sit-skip-ego">
+          Skip ego (raw xyz + yaw flip only; default uses official viz transform)
         </label>
       </div>
     </div>
