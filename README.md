@@ -1,5 +1,7 @@
 # parmanu-viz: Browser-Based 3D Point Cloud Visualization
 
+**VR (WebXR):** Meta Quest 3 and immersive browsers — see [Viewing in VR](#viewing-in-vr-meta-quest-3).
+
 ## Philosophy & Vision
 
 **parmanu-viz** (Sanskrit: "parmanu" = atom/particle) is built on core principles:
@@ -44,6 +46,58 @@ Select three files for the same frame (e.g. `000001`):
 
 Controls: drag to orbit, scroll to zoom, right-drag to pan, **R** to reset view.
 
+## Viewing in VR (Meta Quest 3)
+
+parmanu-viz supports **immersive WebXR** in the Quest Browser (and other WebXR browsers). You view the same point cloud and 3D boxes as on desktop, and move with the Touch controllers.
+
+### Quick start (GitHub Pages + files on the headset)
+
+1. On your PC, copy one frame’s files into a folder, e.g. `parmanu/`:
+   - **KITTI:** `000001.bin`, `000001.txt` (label_2), `000001.txt` (calib)
+   - **SiT:** `{frame}.pcd` and optional label/ego `.txt` files
+2. Transfer that folder to the headset (USB cable → **Internal storage/Download/parmanu/**, or `adb push` — see below).
+3. Put on the headset and open **Quest Browser**.
+4. Go to the live app: [https://ankk98.github.io/parmanu-viz/](https://ankk98.github.io/parmanu-viz/)
+5. Choose the dataset, tap each file input, and pick files from **Download/parmanu/**.
+6. Tap **Visualize**, then tap **Enter VR** (bottom of the view).
+7. Use the controllers:
+   - **Left stick:** walk and strafe
+   - **Left grip + stick up/down:** change height
+   - **Right stick:** turn and look up/down
+   - **Trigger (point at floor):** teleport
+   - **Right grip:** show/hide help and legend panels
+
+### If “Enter VR” does not appear
+
+- Use **Quest Browser** (not a non-XR browser).
+- The site must be **HTTPS** (GitHub Pages is fine; `file://` will not work).
+- In Quest Browser, open `chrome://flags` and ensure **WebXR** is enabled.
+- Reload the page after enabling flags.
+
+### Developer option: PC and headset on the same Wi‑Fi
+
+Serve the repo from your computer so the headset loads the app over the LAN:
+
+```bash
+cd parmanu-viz
+python -m http.server 8000 --bind 0.0.0.0
+```
+
+On the Quest, open `http://<your-pc-ip>:8000/` (replace with your computer’s LAN address). Then pick files and use **Enter VR** as above.
+
+### Copy files with ADB (optional)
+
+```bash
+adb push 000001.bin /sdcard/Download/parmanu/
+adb push 000001.txt /sdcard/Download/parmanu/   # repeat for label and calib files
+```
+
+### Comfort
+
+- Teleport reduces motion sickness compared to stick-only movement; use trigger on the floor when possible.
+- Stand or sit with space to move your arms.
+- Large KITTI frames may use automatic point subsampling in VR to keep framerate smooth.
+
 ## Architecture
 
 ### Technology Stack
@@ -60,6 +114,8 @@ Controls: drag to orbit, scroll to zoom, right-drag to pan, **R** to reset view.
 | `assets/three.min.js` | Three.js r134 (global `THREE`) |
 | `assets/OrbitControls.js` | Orbit controls |
 | `assets/PCDLoader.js` | SiT `.pcd` loader (`binary_compressed`) |
+| `assets/VRButton.js` | WebXR Enter/Exit VR button |
+| `js/vr.js` | WebXR session, controllers, locomotion |
 | `js/datasets/registry.js` | Dataset registry + selector |
 | `js/datasets/kitti.js` | KITTI parsers + box math |
 | `js/datasets/sit.js` | SiT PCD + label_3d + ego |

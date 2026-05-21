@@ -24,12 +24,12 @@
 4. App loads and visualizes point cloud + 3D boxes aligned in **Velodyne** coordinates
 5. Uses mouse/keyboard (OrbitControls) to explore on **desktop**
 
-**v2+**: HTML export, Quest 3 / WebXR VR
+**v2+**: HTML export · **VR:** [VR_SUPPORT_PLAN.md](./VR_SUPPORT_PLAN.md) (shipped)
 
 **Key Requirements**:
 - No local installation required
 - Works with standard KITTI file formats (no folder layout detection in v1)
-- **Desktop browser v1** (Chrome/Edge/Firefox); VR deferred to v2
+- **Desktop browser v1** (Chrome/Edge/Firefox); **WebXR VR** on Quest 3 — see [VR_SUPPORT_PLAN.md](./VR_SUPPORT_PLAN.md)
 - Fast, responsive, GPU-accelerated
 - Easy to extend for other datasets (Waymo, nuScenes, custom formats)
 
@@ -39,7 +39,7 @@
 
 - **Frontend**: Pure HTML + JavaScript (ES6+)
 - **3D Rendering**: Three.js (bundled locally for offline support)
-- **VR Support**: WebXR API (**v2+**)
+- **VR Support**: WebXR API — [VR_SUPPORT_PLAN.md](./VR_SUPPORT_PLAN.md)
 - **File Access**: Per-file pickers (v1); directory API (v2+)
 - **Deployment**: GitHub Pages (static hosting)
 

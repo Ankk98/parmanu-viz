@@ -1,5 +1,5 @@
 /**
- * parmanu-viz v1 — desktop viewer, no server.
+ * parmanu-viz — desktop + WebXR viewer, no server.
  */
 (function () {
   const els = {
@@ -59,6 +59,13 @@
     console.error(err);
     setStatus('Viewer init failed: ' + (err.message || err), true);
     return;
+  }
+
+  if (typeof window.parmanuVr === 'undefined') {
+    console.warn('parmanu-viz: js/vr.js not loaded; VR disabled');
+  } else {
+    window.parmanuVr.init(window.viewer);
+    window.parmanuVr.setSceneReady(false);
   }
 
   function applyDatasetUi(id) {
@@ -172,6 +179,7 @@
 
   els.visualize.addEventListener('click', function () {
     els.visualize.disabled = true;
+    if (window.parmanuVr) window.parmanuVr.setSceneReady(false);
     setStatus('Loading…');
     explorer
       .getFilesAsync()
@@ -184,6 +192,12 @@
           const stats = window.viewer.loadScene(scene);
           const ms = (performance.now() - t0).toFixed(0);
           updateLegend(scene.boxes);
+          if (window.parmanuVr) {
+            window.parmanuVr.setSceneReady(true);
+            window.parmanuVr.updateLegendPanel(
+              window.viewer.getLegendEntries(),
+            );
+          }
           els.resetView.disabled = false;
           els.sensorPov.disabled = false;
           els.overview.disabled = false;
@@ -192,6 +206,14 @@
             suffix += ' · skip ego (yaw flip only)';
           } else if (!files.pointsOnly && datasetId === 'sit') {
             suffix += ' · official viz transform';
+          }
+          if (stats.vrDecimation) {
+            suffix +=
+              ' (VR: ' +
+              stats.vrDecimation.originalCount.toLocaleString() +
+              ' → ' +
+              stats.vrDecimation.decimatedCount.toLocaleString() +
+              ' points)';
           }
           setStatus(
             DatasetRegistry.get(datasetId).name +
@@ -236,6 +258,10 @@
 
   document.addEventListener('keydown', function (e) {
     if (e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT')) {
+      return;
+    }
+    var renderer = window.viewer.getRenderer && window.viewer.getRenderer();
+    if (renderer && renderer.xr && renderer.xr.isPresenting) {
       return;
     }
     if (e.key === 'r' || e.key === 'R') window.viewer.resetView();

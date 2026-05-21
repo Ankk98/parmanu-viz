@@ -2,7 +2,7 @@
 
 Implementation plan for **immersive WebXR viewing on Meta Quest 3** (and other WebXR-capable browsers), with **VR controller navigation** and **GPU-accelerated rendering**.
 
-**Status:** Not implemented (desktop v1 is complete).  
+**Status:** Implemented (desktop v1 + WebXR VR on Three.js r134).  
 **Reference (read-only, proven on Quest):** `~/repos/mmdetection3d/tools/analysis_tools/assets/sit_viz_logic.js`, `sit_viz_template.html`, `sit_editor_logic.js` (editor has simpler VR — viz logic is the primary port source).
 
 **Related:** [PARMANU_VIZ_PLAN.md](./PARMANU_VIZ_PLAN.md) (v2+ VR deferred), [SIT_DATASET_PLAN.md](./SIT_DATASET_PLAN.md) (dataset contracts unchanged in VR).

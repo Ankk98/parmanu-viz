@@ -1,5 +1,5 @@
 /**
- * Desktop LiDAR viewer (z-up, OrbitControls).
+ * LiDAR viewer (z-up desktop, WebXR-ready scene graph).
  * Requires global THREE and THREE.OrbitControls.
  */
 (function () {
@@ -8,6 +8,10 @@
     [4, 5], [5, 6], [6, 7], [7, 4],
     [0, 4], [1, 5], [2, 6], [3, 7],
   ];
+
+  var VR_MAX_POINTS = 80000;
+  var VR_POINT_SIZE = 0.06;
+  var DESKTOP_POINT_SIZE = 0.08;
 
   function cornersToLinePositions(corners) {
     var positions = [];
@@ -43,18 +47,84 @@
     return '#' + s.toUpperCase();
   }
 
+  function intensityRange(points, numPoints) {
+    var iMin = Infinity;
+    var iMax = -Infinity;
+    var i;
+    for (i = 0; i < numPoints; i++) {
+      var inten = points[i * 4 + 3];
+      if (inten < iMin) iMin = inten;
+      if (inten > iMax) iMax = inten;
+    }
+    return { iMin: iMin, iMax: iMax, iRange: Math.max(iMax - iMin, 1e-6) };
+  }
+
+  function buildPositionColorArrays(points, numPoints, iMin, iRange) {
+    var positions = new Float32Array(numPoints * 3);
+    var colors = new Float32Array(numPoints * 3);
+    var i;
+    for (i = 0; i < numPoints; i++) {
+      positions[i * 3] = points[i * 4];
+      positions[i * 3 + 1] = points[i * 4 + 1];
+      positions[i * 3 + 2] = points[i * 4 + 2];
+      var t = (points[i * 4 + 3] - iMin) / iRange;
+      var c = 0.35 + t * 0.55;
+      colors[i * 3] = c;
+      colors[i * 3 + 1] = c;
+      colors[i * 3 + 2] = c * 0.95;
+    }
+    return { positions: positions, colors: colors };
+  }
+
+  function decimateForVr(points) {
+    var numPoints = points.length / 4;
+    if (numPoints <= VR_MAX_POINTS) {
+      return {
+        points: points,
+        originalCount: numPoints,
+        decimatedCount: numPoints,
+        decimated: false,
+      };
+    }
+    var stride = Math.ceil(numPoints / VR_MAX_POINTS);
+    var outCount = Math.ceil(numPoints / stride);
+    var out = new Float32Array(outCount * 4);
+    var j = 0;
+    var i;
+    for (i = 0; i < numPoints; i += stride) {
+      var base = i * 4;
+      out[j * 4] = points[base];
+      out[j * 4 + 1] = points[base + 1];
+      out[j * 4 + 2] = points[base + 2];
+      out[j * 4 + 3] = points[base + 3];
+      j++;
+    }
+    return {
+      points: out,
+      originalCount: numPoints,
+      decimatedCount: j,
+      decimated: true,
+    };
+  }
+
   var viewer = {
     _container: null,
     _scene: null,
+    _contentGroup: null,
+    _xrRig: null,
     _camera: null,
     _renderer: null,
     _controls: null,
+    _clock: null,
     _points: null,
+    _vrPoints: null,
     _boxGroup: null,
+    _lastBoxes: [],
+    _vrDecimation: null,
     _initialCamera: null,
     _sceneCenter: null,
     _sceneMaxDim: 20,
-    _animId: null,
+    _circleTex: null,
 
     init: function (container) {
       this._container = container;
@@ -64,13 +134,28 @@
       this._scene = new THREE.Scene();
       this._scene.background = new THREE.Color(0x1a1a1a);
 
+      this._contentGroup = new THREE.Group();
+      this._scene.add(this._contentGroup);
+
+      this._xrRig = new THREE.Group();
+      this._scene.add(this._xrRig);
+
       this._camera = new THREE.PerspectiveCamera(75, w / h, 0.1, 10000);
       this._camera.up.set(0, 0, 1);
       this._camera.position.set(20, 20, 20);
+      this._xrRig.add(this._camera);
 
-      this._renderer = new THREE.WebGLRenderer({ antialias: true });
+      this._renderer = new THREE.WebGLRenderer({
+        antialias: true,
+        powerPreference: 'high-performance',
+      });
       this._renderer.setSize(w, h);
       this._renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+      this._renderer.xr.enabled = true;
+      this._renderer.xr.setReferenceSpaceType('local-floor');
+      if (this._renderer.xr.setFoveation) {
+        this._renderer.xr.setFoveation(1.0);
+      }
       container.appendChild(this._renderer.domElement);
 
       this._controls = new THREE.OrbitControls(this._camera, this._renderer.domElement);
@@ -80,22 +165,36 @@
       this._configureOrbitLimits(20);
 
       var ambient = new THREE.AmbientLight(0xffffff, 0.6);
-      this._scene.add(ambient);
+      this._contentGroup.add(ambient);
       var dir = new THREE.DirectionalLight(0xffffff, 0.8);
       dir.position.set(1, 1, 1);
-      this._scene.add(dir);
+      this._contentGroup.add(dir);
 
       this._boxGroup = new THREE.Group();
-      this._scene.add(this._boxGroup);
+      this._contentGroup.add(this._boxGroup);
 
       var axes = new THREE.AxesHelper(3);
-      this._scene.add(axes);
+      this._contentGroup.add(axes);
+
+      this._clock = new THREE.Clock();
 
       var self = this;
       window.addEventListener('resize', function () {
         self._onResize();
       });
-      this._animate();
+
+      function animate() {
+        var delta = self._clock.getDelta();
+        if (self._renderer.xr.isPresenting) {
+          if (window.parmanuVr && window.parmanuVr.updateFrame) {
+            window.parmanuVr.updateFrame(delta);
+          }
+        } else {
+          self._controls.update();
+        }
+        self._renderer.render(self._scene, self._camera);
+      }
+      this._renderer.setAnimationLoop(animate);
 
       return this;
     },
@@ -107,16 +206,39 @@
       this._camera.aspect = w / h;
       this._camera.updateProjectionMatrix();
       this._renderer.setSize(w, h);
+      if (!this._renderer.xr.isPresenting) {
+        this._renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+      }
     },
 
-    _animate: function () {
-      var self = this;
-      function frame() {
-        self._animId = requestAnimationFrame(frame);
-        self._controls.update();
-        self._renderer.render(self._scene, self._camera);
-      }
-      frame();
+    _circleTexture: function () {
+      if (this._circleTex) return this._circleTex;
+      var canvas = document.createElement('canvas');
+      canvas.width = 32;
+      canvas.height = 32;
+      var ctx = canvas.getContext('2d');
+      ctx.beginPath();
+      ctx.arc(16, 16, 15, 0, 2 * Math.PI);
+      ctx.fillStyle = '#ffffff';
+      ctx.fill();
+      this._circleTex = new THREE.CanvasTexture(canvas);
+      return this._circleTex;
+    },
+
+    _makePointsMesh: function (positions, colors, size) {
+      var geom = new THREE.BufferGeometry();
+      geom.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+      geom.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+      var mat = new THREE.PointsMaterial({
+        size: size,
+        sizeAttenuation: true,
+        vertexColors: true,
+        map: this._circleTexture(),
+        alphaTest: 0.5,
+        transparent: true,
+        opacity: 0.85,
+      });
+      return new THREE.Points(geom, mat);
     },
 
     loadScene: function (scene) {
@@ -125,47 +247,45 @@
       this._clearScene();
 
       var numPoints = points.length / 4;
-      var positions = new Float32Array(numPoints * 3);
-      var colors = new Float32Array(numPoints * 3);
+      var range = intensityRange(points, numPoints);
+      var built = buildPositionColorArrays(
+        points,
+        numPoints,
+        range.iMin,
+        range.iRange,
+      );
 
-      var iMin = Infinity;
-      var iMax = -Infinity;
+      this._points = this._makePointsMesh(
+        built.positions,
+        built.colors,
+        DESKTOP_POINT_SIZE,
+      );
+      this._contentGroup.add(this._points);
+
+      var vrData = decimateForVr(points);
+      this._vrDecimation = vrData.decimated
+        ? {
+            originalCount: vrData.originalCount,
+            decimatedCount: vrData.decimatedCount,
+          }
+        : null;
+
+      var vrBuilt = buildPositionColorArrays(
+        vrData.points,
+        vrData.decimatedCount,
+        range.iMin,
+        range.iRange,
+      );
+      this._vrPoints = this._makePointsMesh(
+        vrBuilt.positions,
+        vrBuilt.colors,
+        VR_POINT_SIZE,
+      );
+      this._vrPoints.visible = false;
+      this._contentGroup.add(this._vrPoints);
+
+      this._lastBoxes = boxes;
       var i;
-      for (i = 0; i < numPoints; i++) {
-        var inten = points[i * 4 + 3];
-        if (inten < iMin) iMin = inten;
-        if (inten > iMax) iMax = inten;
-      }
-      var iRange = Math.max(iMax - iMin, 1e-6);
-
-      for (i = 0; i < numPoints; i++) {
-        positions[i * 3] = points[i * 4];
-        positions[i * 3 + 1] = points[i * 4 + 1];
-        positions[i * 3 + 2] = points[i * 4 + 2];
-        var t = (points[i * 4 + 3] - iMin) / iRange;
-        var c = 0.35 + t * 0.55;
-        colors[i * 3] = c;
-        colors[i * 3 + 1] = c;
-        colors[i * 3 + 2] = c * 0.95;
-      }
-
-      var geom = new THREE.BufferGeometry();
-      geom.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-      geom.setAttribute('color', new THREE.BufferAttribute(colors, 3));
-
-      var mat = new THREE.PointsMaterial({
-        size: 0.08,
-        sizeAttenuation: true,
-        vertexColors: true,
-        map: this._circleTexture(),
-        alphaTest: 0.5,
-        transparent: true,
-        opacity: 0.85,
-      });
-
-      this._points = new THREE.Points(geom, mat);
-      this._scene.add(this._points);
-
       for (i = 0; i < boxes.length; i++) {
         var box = boxes[i];
         var linePos = cornersToLinePositions(box.corners);
@@ -178,26 +298,14 @@
         this._boxGroup.add(segs);
       }
 
-      this._fitCamera(positions);
-      return { numPoints: numPoints, numBoxes: boxes.length };
+      this._fitCamera(built.positions);
+      return {
+        numPoints: numPoints,
+        numBoxes: boxes.length,
+        vrDecimation: this._vrDecimation,
+      };
     },
 
-    _circleTexture: function () {
-      var canvas = document.createElement('canvas');
-      canvas.width = 32;
-      canvas.height = 32;
-      var ctx = canvas.getContext('2d');
-      ctx.beginPath();
-      ctx.arc(16, 16, 15, 0, 2 * Math.PI);
-      ctx.fillStyle = '#ffffff';
-      ctx.fill();
-      return new THREE.CanvasTexture(canvas);
-    },
-
-    /**
-     * Orbit limits aligned with mmdet3d sit_viz_logic.js (render_sit_gt cameraDistance).
-     * @param {number} maxDim — max extent of scene bbox (meters)
-     */
     _configureOrbitLimits: function (maxDim) {
       var cameraDistance = Math.max(maxDim * 2.0, 10);
       this._controls.minDistance = 0.001;
@@ -233,10 +341,6 @@
       };
     },
 
-    /**
-     * Default SiT/MMDet-style view: orbit target at LiDAR origin (0,0,0),
-     * camera placed from scene bbox center — sit_viz_logic.js / render_sit_gt.
-     */
     _setSitVizCamera: function (cx, cy, cz, maxDim) {
       var cameraDistance = Math.max(maxDim * 2.0, 10);
       this._controls.target.set(0, 0, 0);
@@ -261,7 +365,6 @@
       };
     },
 
-    /** Orbit target at cloud center; camera outside (overview). */
     _setOverviewCamera: function () {
       var c = this._sceneCenter;
       if (!c) return;
@@ -275,7 +378,6 @@
       this._controls.update();
     },
 
-    /** LiDAR sensor POV — orbit (0,0,0), same as sit_viz_logic.js. */
     goToSensorPov: function () {
       var c = this._sceneCenter;
       if (!c) return;
@@ -297,14 +399,76 @@
       return !!this._points;
     },
 
-    _clearScene: function () {
-      if (this._points) {
-        this._scene.remove(this._points);
-        this._points.geometry.dispose();
-        this._points.material.dispose();
-        if (this._points.material.map) this._points.material.map.dispose();
-        this._points = null;
+    getRenderer: function () {
+      return this._renderer;
+    },
+
+    getCamera: function () {
+      return this._camera;
+    },
+
+    getScene: function () {
+      return this._scene;
+    },
+
+    getContentGroup: function () {
+      return this._contentGroup;
+    },
+
+    getXrRig: function () {
+      return this._xrRig;
+    },
+
+    getControls: function () {
+      return this._controls;
+    },
+
+    getSceneMaxDim: function () {
+      return this._sceneMaxDim;
+    },
+
+    getVrDecimation: function () {
+      return this._vrDecimation;
+    },
+
+    getLegendEntries: function () {
+      var counts = {};
+      var i;
+      for (i = 0; i < this._lastBoxes.length; i++) {
+        var t = this._lastBoxes[i].type;
+        counts[t] = (counts[t] || 0) + 1;
       }
+      var types = Object.keys(counts).sort();
+      var entries = [];
+      for (i = 0; i < types.length; i++) {
+        entries.push({
+          type: types[i],
+          hex: typeColorHex(types[i]),
+          count: counts[types[i]],
+        });
+      }
+      return entries;
+    },
+
+    setVrPointVisibility: function (inVr) {
+      if (this._points) this._points.visible = !inVr;
+      if (this._vrPoints) this._vrPoints.visible = inVr;
+    },
+
+    _disposePointsMesh: function (mesh) {
+      if (!mesh) return;
+      this._contentGroup.remove(mesh);
+      mesh.geometry.dispose();
+      mesh.material.dispose();
+    },
+
+    _clearScene: function () {
+      this._disposePointsMesh(this._points);
+      this._points = null;
+      this._disposePointsMesh(this._vrPoints);
+      this._vrPoints = null;
+      this._vrDecimation = null;
+      this._lastBoxes = [];
       while (this._boxGroup.children.length) {
         var ch = this._boxGroup.children[0];
         ch.geometry.dispose();
@@ -314,10 +478,13 @@
     },
 
     dispose: function () {
-      if (this._animId) cancelAnimationFrame(this._animId);
       this._clearScene();
       if (this._controls && this._controls.dispose) this._controls.dispose();
-      if (this._renderer) this._renderer.dispose();
+      if (this._renderer) {
+        this._renderer.setAnimationLoop(null);
+        this._renderer.dispose();
+      }
+      if (this._circleTex) this._circleTex.dispose();
     },
 
     getTypeColorHex: typeColorHex,

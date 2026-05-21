@@ -214,3 +214,19 @@ h1 {
   opacity: 0.8;
   line-height: 1.4;
 }
+
+#xr-status {
+  margin-top: 6px;
+  opacity: 0.9;
+}
+
+body.vr-presenting #file-panel,
+body.vr-presenting #hud,
+body.vr-presenting #status,
+body.vr-presenting #legend {
+  display: none !important;
+}
+
+body.vr-presenting #VRButton {
+  bottom: 24px;
+}

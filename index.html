@@ -9,7 +9,7 @@
 <body>
   <div id="file-panel">
     <h1>parmanu-viz</h1>
-    <p class="subtitle">Open this file directly — no server</p>
+    <p class="subtitle">Desktop: open via http://localhost or GitHub Pages. VR: Quest Browser + HTTPS only.</p>
 
     <label class="dataset-label">
       Dataset
@@ -68,6 +68,7 @@
     <div><strong>Controls</strong></div>
     <div>Drag: orbit · Scroll: zoom · Right-drag: pan</div>
     <div>O: sensor POV · V: overview · R: reset view</div>
+    <div id="xr-status"><strong>WebXR:</strong> checking…</div>
   </div>
 
   <div id="status">Select a dataset and files, then Visualize</div>
@@ -76,7 +77,9 @@
   <script src="assets/three.min.js"></script>
   <script src="assets/OrbitControls.js"></script>
   <script src="assets/PCDLoader.js"></script>
+  <script src="assets/VRButton.js"></script>
   <script src="js/viewer.js"></script>
+  <script src="js/vr.js"></script>
   <script src="js/datasets/registry.js"></script>
   <script src="js/explorer.js"></script>
   <script src="js/datasets/kitti.js"></script>
