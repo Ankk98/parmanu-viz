@@ -6,6 +6,8 @@ Browser-based visualizer for 3D point clouds with annotations.
 
 ![KITTI point cloud and 3D bounding boxes in parmanu-viz](screenshots/v1-kitti.png)
 
+![SiT point cloud](screenshots/v1-kitti.png)
+
 ## Supported Datasets
 - **KITTI Object** — `.bin` + `label_2` + calib
 - **SiT** — `velo/concat` `.pcd` + optional `label_3d` + `ego_trajectory` (browser-only, no conversion)
