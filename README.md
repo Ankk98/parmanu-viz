@@ -4,6 +4,8 @@ Browser-based visualizer for 3D point clouds with annotations.
 
 **No server required.** Open `index.html` in Chrome or Firefox (double-click or `file://`).
 
+![KITTI point cloud and 3D bounding boxes in parmanu-viz](screenshots/v1-kitti.png)
+
 ## Supported Datasets
 - KITTI
 
