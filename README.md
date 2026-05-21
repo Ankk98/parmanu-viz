@@ -15,7 +15,7 @@
 
 ![KITTI point cloud and 3D bounding boxes in parmanu-viz](screenshots/v1-kitti.png)
 
-![SiT point cloud](screenshots/v1-kitti.png)
+![SiT point cloud](screenshots/v1-SiT.png)
 
 ## Supported Datasets
 - **KITTI Object** — `.bin` + `label_2` + calib
