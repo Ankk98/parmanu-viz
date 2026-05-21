@@ -46,6 +46,10 @@
     xrController1: null,
     controlsHelpTimeout: null,
     legendTexture: null,
+    debugPanel: null,
+    debugCtx: null,
+    debugTexture: null,
+    panelsToggleDebounce: 0,
   };
 
   var xrStatusSettled = false;
@@ -248,26 +252,19 @@
     return label;
   }
 
-  /** Poll live gamepad from XR input source (sit_viz_logic.js pattern). */
-  function refreshControllerGamepad(controller) {
-    var src = controller.userData.inputSource;
-    if (src && src.gamepad) {
-      controller.userData.gamepad = src.gamepad;
-    }
-  }
-
   /**
-   * Thumbstick axes — sit_viz_logic.js uses axes[2,3] ?? [0,1].
-   * Pick whichever pair has larger deflection (Quest builds vary).
+   * Pick thumbstick X/Y from a Gamepad. Quest Touch typically exposes
+   * thumbstick on axes[2,3]; some browsers/profiles use [0,1].
+   * Auto-select whichever pair has non-zero deflection.
    */
   function readThumbstick(gp) {
     if (!gp || !gp.axes || gp.axes.length < 2) {
       return { x: 0, y: 0 };
     }
-    var x01 = gp.axes[0] || 0;
-    var y01 = gp.axes[1] || 0;
-    var x23 = gp.axes.length > 2 ? gp.axes[2] || 0 : 0;
-    var y23 = gp.axes.length > 3 ? gp.axes[3] || 0 : 0;
+    var x01 = +gp.axes[0] || 0;
+    var y01 = +gp.axes[1] || 0;
+    var x23 = gp.axes.length > 3 ? +gp.axes[2] || 0 : 0;
+    var y23 = gp.axes.length > 3 ? +gp.axes[3] || 0 : 0;
     var mag01 = x01 * x01 + y01 * y01;
     var mag23 = x23 * x23 + y23 * y23;
     var rawX = mag23 > mag01 ? x23 : x01;
@@ -279,22 +276,44 @@
     };
   }
 
-  function isGripPressed(gp) {
-    return !!(
-      gp &&
-      gp.buttons &&
-      gp.buttons.length > 1 &&
-      gp.buttons[1] &&
-      gp.buttons[1].pressed
-    );
+  function isButtonPressed(gp, idx) {
+    if (!gp || !gp.buttons || !gp.buttons[idx]) return false;
+    var b = gp.buttons[idx];
+    return !!(b.pressed || (b.value != null && b.value > 0.5));
   }
 
-  function pickController(hand) {
-    var c0 = state.xrController0;
-    var c1 = state.xrController1;
-    if (c0 && c0.userData.handedness === hand) return c0;
-    if (c1 && c1.userData.handedness === hand) return c1;
-    return hand === 'left' ? c0 : c1;
+  /** Live input snapshot from the active XR session each frame. */
+  function snapshotInputs() {
+    var snap = {
+      left: { gp: null, handedness: null },
+      right: { gp: null, handedness: null },
+      raw: [],
+    };
+    var session = state.renderer && state.renderer.xr.getSession();
+    if (!session || !session.inputSources) return snap;
+    var sources = session.inputSources;
+    var firstWith = null;
+    for (var i = 0; i < sources.length; i++) {
+      var src = sources[i];
+      if (!src) continue;
+      var gp = src.gamepad || null;
+      snap.raw.push({ hand: src.handedness, gp: gp });
+      if (gp && !firstWith) firstWith = { hand: src.handedness, gp: gp };
+      if (src.handedness === 'left') {
+        snap.left.gp = gp;
+        snap.left.handedness = 'left';
+      } else if (src.handedness === 'right') {
+        snap.right.gp = gp;
+        snap.right.handedness = 'right';
+      }
+    }
+    // Fallback: if handedness is missing (some Quest setups), assign by order
+    if (!snap.left.gp && !snap.right.gp && firstWith && sources.length >= 1) {
+      // index 0 -> left, index 1 -> right (matches getController(0/1))
+      if (sources[0] && sources[0].gamepad) snap.left.gp = sources[0].gamepad;
+      if (sources[1] && sources[1].gamepad) snap.right.gp = sources[1].gamepad;
+    }
+    return snap;
   }
 
   function addXRController(index) {
@@ -368,23 +387,18 @@
     return null;
   }
 
-  function updateXrLocomotion(delta) {
+  function updateXrLocomotion(delta, snap) {
     if (!state.renderer.xr.isPresenting) return;
 
-    var leftController = pickController('left');
-    var rightController = pickController('right');
-    if (leftController) refreshControllerGamepad(leftController);
-    if (rightController) refreshControllerGamepad(rightController);
-
-    var leftGp = leftController && leftController.userData.gamepad;
-    if (leftGp && leftGp.axes && leftGp.axes.length >= 2) {
+    var leftGp = snap.left.gp;
+    if (leftGp) {
       var leftStick = readThumbstick(leftGp);
       var ax = leftStick.x;
       var ay = leftStick.y;
-      var gripPressed = isGripPressed(leftGp);
+      var leftGrip = isButtonPressed(leftGp, 1);
 
-      if (gripPressed && ay !== 0) {
-        state.xrRig.position.y += ay * HEIGHT_SPEED * delta;
+      if (leftGrip && ay !== 0) {
+        state.xrRig.position.y += -ay * HEIGHT_SPEED * delta;
       } else if (ax !== 0 || ay !== 0) {
         state.camera.getWorldDirection(_dir);
         _dir.y = 0;
@@ -397,19 +411,22 @@
       }
     }
 
-    var rightGp = rightController && rightController.userData.gamepad;
-    if (rightGp && rightGp.axes && rightGp.axes.length >= 2) {
+    var rightGp = snap.right.gp;
+    if (rightGp) {
       var rightStick = readThumbstick(rightGp);
       var rax = rightStick.x;
       var ray = rightStick.y;
-      var rightGrip = isGripPressed(rightGp);
+      var rightGrip = isButtonPressed(rightGp, 1);
 
       if (rightGrip && ray !== 0) {
         state.camera.getWorldDirection(_dir);
         _dir.y = 0;
         if (_dir.lengthSq() > 1e-6) {
           _dir.normalize();
-          state.xrRig.position.addScaledVector(_dir, -ray * DOLLY_SPEED * delta);
+          state.xrRig.position.addScaledVector(
+            _dir,
+            -ray * DOLLY_SPEED * delta,
+          );
         }
       }
 
@@ -430,6 +447,104 @@
         }
       }
     }
+  }
+
+  function fmtAxes(gp) {
+    if (!gp || !gp.axes) return 'no gp';
+    var parts = [];
+    for (var i = 0; i < gp.axes.length; i++) {
+      parts.push((gp.axes[i] || 0).toFixed(2));
+    }
+    return '[' + parts.join(', ') + ']';
+  }
+
+  function fmtButtons(gp) {
+    if (!gp || !gp.buttons) return '';
+    var pressed = [];
+    for (var i = 0; i < gp.buttons.length; i++) {
+      if (gp.buttons[i] && gp.buttons[i].pressed) pressed.push(i);
+    }
+    return pressed.length ? 'btn:' + pressed.join(',') : '';
+  }
+
+  function createDebugPanel() {
+    var canvas = document.createElement('canvas');
+    canvas.width = 1024;
+    canvas.height = 256;
+    state.debugCtx = canvas.getContext('2d');
+    state.debugTexture = new THREE.CanvasTexture(canvas);
+    var panel = new THREE.Mesh(
+      new THREE.PlaneGeometry(1.6, 0.4),
+      new THREE.MeshBasicMaterial({
+        map: state.debugTexture,
+        transparent: true,
+        side: THREE.DoubleSide,
+      }),
+    );
+    panel.position.set(0, 1.0, -1.5);
+    panel.visible = true;
+    return panel;
+  }
+
+  function updateDebugPanel(snap) {
+    var ctx = state.debugCtx;
+    if (!ctx || !state.debugTexture) return;
+    ctx.clearRect(0, 0, 1024, 256);
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.75)';
+    ctx.fillRect(0, 0, 1024, 256);
+    ctx.strokeStyle = '#00ff88';
+    ctx.lineWidth = 3;
+    ctx.strokeRect(6, 6, 1012, 244);
+
+    ctx.fillStyle = '#00ff88';
+    ctx.font = 'bold 24px monospace';
+    ctx.textAlign = 'left';
+    ctx.fillText(
+      'XR inputs: ' + snap.raw.length + ' source(s)',
+      20,
+      35,
+    );
+
+    ctx.font = '22px monospace';
+    ctx.fillStyle = '#ffffff';
+    var leftLine =
+      'L (' +
+      (snap.left.handedness || '?') +
+      '): axes=' +
+      fmtAxes(snap.left.gp) +
+      ' ' +
+      fmtButtons(snap.left.gp);
+    var rightLine =
+      'R (' +
+      (snap.right.handedness || '?') +
+      '): axes=' +
+      fmtAxes(snap.right.gp) +
+      ' ' +
+      fmtButtons(snap.right.gp);
+    ctx.fillText(leftLine, 20, 90);
+    ctx.fillText(rightLine, 20, 130);
+
+    var ls = readThumbstick(snap.left.gp);
+    var rs = readThumbstick(snap.right.gp);
+    ctx.fillStyle = '#ffd479';
+    ctx.fillText(
+      'stick L=(' + ls.x.toFixed(2) + ',' + ls.y.toFixed(2) + ')' +
+        '  R=(' + rs.x.toFixed(2) + ',' + rs.y.toFixed(2) + ')',
+      20,
+      175,
+    );
+
+    ctx.fillStyle = '#aaaaaa';
+    ctx.font = '18px monospace';
+    ctx.fillText(
+      'Trigger held: ' +
+        (state.xrController0 && state.xrController0.userData.isSelecting ? 'C0 ' : '') +
+        (state.xrController1 && state.xrController1.userData.isSelecting ? 'C1 ' : ''),
+      20,
+      215,
+    );
+
+    state.debugTexture.needsUpdate = true;
   }
 
   function updateTeleportMarker() {
@@ -464,6 +579,7 @@
     state.originLabel.visible = true;
     state.controlsPanel.visible = true;
     state.vrLegendPanel.visible = true;
+    if (state.debugPanel) state.debugPanel.visible = true;
   }
 
   function onSessionEnd() {
@@ -484,6 +600,7 @@
     state.originLabel.visible = false;
     state.controlsPanel.visible = false;
     state.vrLegendPanel.visible = false;
+    if (state.debugPanel) state.debugPanel.visible = false;
   }
 
   window.parmanuVr = {
@@ -549,6 +666,9 @@
       state.vrLegendPanel = createVRLegendPanel();
       state.xrRig.add(state.vrLegendPanel);
 
+      state.debugPanel = createDebugPanel();
+      state.xrRig.add(state.debugPanel);
+
       state.xrController0 = addXRController(0);
       state.xrController1 = addXRController(1);
 
@@ -588,8 +708,10 @@
 
     updateFrame: function (delta) {
       if (!state.renderer.xr.isPresenting) return;
-      updateXrLocomotion(delta);
+      var snap = snapshotInputs();
+      updateXrLocomotion(delta, snap);
       updateTeleportMarker();
+      updateDebugPanel(snap);
       if (state.originLabel && state.originLabel.visible) {
         state.originLabel.lookAt(state.camera.position);
       }
