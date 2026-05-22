@@ -125,6 +125,64 @@
     _sceneCenter: null,
     _sceneMaxDim: 20,
     _circleTex: null,
+    _sensorFrameGroup: null,
+    _sensorArrow: null,
+    _frontLabel: null,
+
+    _buildSensorFrameMarker: function () {
+      var group = new THREE.Group();
+      group.name = 'sensorFrame';
+
+      var dot = new THREE.Mesh(
+        new THREE.SphereGeometry(0.08, 12, 12),
+        new THREE.MeshBasicMaterial({ color: 0x00ffff }),
+      );
+      group.add(dot);
+
+      var arrow = new THREE.ArrowHelper(
+        new THREE.Vector3(1, 0, 0),
+        new THREE.Vector3(0, 0, 0),
+        2,
+        0xff6600,
+        0.5,
+        0.35,
+      );
+      group.add(arrow);
+      this._sensorArrow = arrow;
+
+      var canvas = document.createElement('canvas');
+      canvas.width = 256;
+      canvas.height = 64;
+      var ctx = canvas.getContext('2d');
+      ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+      ctx.fillRect(0, 0, 256, 64);
+      ctx.fillStyle = '#ff6600';
+      ctx.font = 'bold 32px Arial, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText('FRONT (+X)', 128, 32);
+      var tex = new THREE.CanvasTexture(canvas);
+      var sprite = new THREE.Sprite(
+        new THREE.SpriteMaterial({ map: tex, transparent: true }),
+      );
+      sprite.position.set(2.2, 0, 0.2);
+      sprite.scale.set(1, 0.25, 1);
+      group.add(sprite);
+      this._frontLabel = sprite;
+
+      return group;
+    },
+
+    _updateSensorFrameMarkerScale: function (maxDim) {
+      if (!this._sensorArrow) return;
+      var len = Math.min(Math.max(maxDim * 0.035, 1.2), 3.5);
+      this._sensorArrow.setLength(len, len * 0.28, len * 0.18);
+      if (this._frontLabel) {
+        this._frontLabel.position.set(len * 1.08, 0, Math.max(0.15, len * 0.05));
+        var s = Math.max(len * 0.22, 0.55);
+        this._frontLabel.scale.set(s, s * 0.25, 1);
+      }
+    },
 
     init: function (container) {
       this._container = container;
@@ -175,6 +233,9 @@
 
       var axes = new THREE.AxesHelper(3);
       this._contentGroup.add(axes);
+
+      this._sensorFrameGroup = this._buildSensorFrameMarker();
+      this._contentGroup.add(this._sensorFrameGroup);
 
       this._clock = new THREE.Clock();
 
@@ -365,6 +426,7 @@
       var b = this._bboxCenter(positions);
       this._sceneCenter = { x: b.cx, y: b.cy, z: b.cz };
       this._sceneMaxDim = b.maxDim;
+      this._updateSensorFrameMarkerScale(b.maxDim);
       this._configureOrbitLimits(b.maxDim);
       this._setSitVizCamera(b.cx, b.cy, b.cz, b.maxDim);
       this._initialCamera = {
@@ -492,6 +554,25 @@
         this._renderer.dispose();
       }
       if (this._circleTex) this._circleTex.dispose();
+      if (this._sensorFrameGroup) {
+        var i;
+        for (i = 0; i < this._sensorFrameGroup.children.length; i++) {
+          var ch = this._sensorFrameGroup.children[i];
+          if (ch.geometry) ch.geometry.dispose();
+          if (ch.material) {
+            if (ch.material.map) ch.material.map.dispose();
+            ch.material.dispose();
+          }
+          if (ch.line && ch.line.geometry) ch.line.geometry.dispose();
+          if (ch.line && ch.line.material) ch.line.material.dispose();
+          if (ch.cone && ch.cone.geometry) ch.cone.geometry.dispose();
+          if (ch.cone && ch.cone.material) ch.cone.material.dispose();
+        }
+        this._contentGroup.remove(this._sensorFrameGroup);
+        this._sensorFrameGroup = null;
+        this._sensorArrow = null;
+        this._frontLabel = null;
+      }
     },
 
     getTypeColorHex: typeColorHex,

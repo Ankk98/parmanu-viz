@@ -221,21 +221,24 @@
   function createOriginLabel() {
     var canvas = document.createElement('canvas');
     canvas.width = 512;
-    canvas.height = 128;
+    canvas.height = 160;
     var ctx = canvas.getContext('2d');
     ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
-    ctx.fillRect(0, 0, 512, 128);
+    ctx.fillRect(0, 0, 512, 160);
     ctx.fillStyle = '#00ffff';
-    ctx.font = 'bold 40px Arial';
+    ctx.font = 'bold 36px Arial';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.fillText('LiDAR Sensor Origin', 256, 40);
-    ctx.font = '32px Arial';
+    ctx.fillText('LiDAR origin — front is +X', 256, 40);
+    ctx.font = '28px Arial';
+    ctx.fillStyle = '#ff6600';
+    ctx.fillText('Orange arrow = FRONT', 256, 82);
     ctx.fillStyle = '#ffffff';
-    ctx.fillText('(0, 0, 0)', 256, 85);
+    ctx.font = '26px Arial';
+    ctx.fillText('(0, 0, 0)', 256, 122);
     var texture = new THREE.CanvasTexture(canvas);
     var label = new THREE.Mesh(
-      new THREE.PlaneGeometry(0.5, 0.125),
+      new THREE.PlaneGeometry(0.55, 0.17),
       new THREE.MeshBasicMaterial({
         map: texture,
         transparent: true,
