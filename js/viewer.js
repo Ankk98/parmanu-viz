@@ -352,6 +352,14 @@
       this._controls.update();
     },
 
+    /** Near Velodyne origin, looking toward +X (KITTI forward). */
+    _setSensorPovCamera: function (maxDim) {
+      var back = Math.max(maxDim * 0.06, 2);
+      this._controls.target.set(0, 0, 0);
+      this._camera.position.set(-back, 0, 1.6);
+      this._controls.update();
+    },
+
     _fitCamera: function (positions) {
       if (positions.length === 0) return;
       var b = this._bboxCenter(positions);
@@ -380,7 +388,7 @@
 
     goToSensorPov: function () {
       if (!this._points) return;
-      this._setSitVizCamera(0, 0, 0, this._sceneMaxDim || 20);
+      this._setSensorPovCamera(this._sceneMaxDim || 20);
     },
 
     goToOverview: function () {
