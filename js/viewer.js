@@ -10,8 +10,9 @@
   ];
 
   var VR_MAX_POINTS = 80000;
-  var VR_POINT_SIZE = 0.06;
-  var DESKTOP_POINT_SIZE = 0.08;
+  /** Screen pixels (sizeAttenuation must stay false for stable GL_POINTS). */
+  var VR_POINT_SIZE = 3;
+  var DESKTOP_POINT_SIZE = 2;
 
   function cornersToLinePositions(corners) {
     var positions = [];
@@ -290,16 +291,21 @@
       var geom = new THREE.BufferGeometry();
       geom.setAttribute('position', new THREE.BufferAttribute(positions, 3));
       geom.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+      geom.computeBoundingSphere();
       var mat = new THREE.PointsMaterial({
         size: size,
-        sizeAttenuation: true,
+        sizeAttenuation: false,
         vertexColors: true,
         map: this._circleTexture(),
-        alphaTest: 0.5,
+        alphaTest: 0.01,
         transparent: true,
-        opacity: 0.85,
+        opacity: 0.9,
+        depthWrite: false,
+        depthTest: false,
       });
-      return new THREE.Points(geom, mat);
+      var cloud = new THREE.Points(geom, mat);
+      cloud.frustumCulled = false;
+      return cloud;
     },
 
     loadScene: function (scene) {
@@ -354,7 +360,10 @@
         lineGeom.setAttribute('position', new THREE.BufferAttribute(linePos, 3));
         var color = TYPE_COLORS[box.type];
         if (color === undefined) color = 0xcccccc;
-        var lineMat = new THREE.LineBasicMaterial({ color: color });
+        var lineMat = new THREE.LineBasicMaterial({
+          color: color,
+          depthWrite: false,
+        });
         var segs = new THREE.LineSegments(lineGeom, lineMat);
         this._boxGroup.add(segs);
       }
@@ -369,7 +378,7 @@
 
     _configureOrbitLimits: function (maxDim) {
       var cameraDistance = Math.max(maxDim * 2.0, 10);
-      this._controls.minDistance = 0.001;
+      this._controls.minDistance = Math.max(maxDim * 0.01, 0.1);
       this._controls.maxDistance = cameraDistance * 10;
       this._controls.zoomSpeed = 2.0;
       this._controls.panSpeed = 0.8;
@@ -404,7 +413,7 @@
 
     _setSitVizCamera: function (cx, cy, cz, maxDim) {
       var cameraDistance = Math.max(maxDim * 2.0, 10);
-      this._controls.target.set(0, 0, 0);
+      this._controls.target.set(cx, cy, cz);
       this._camera.position.set(
         cx + cameraDistance * 0.7,
         cy + cameraDistance * 0.7,
