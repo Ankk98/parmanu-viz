@@ -379,9 +379,8 @@
     },
 
     goToSensorPov: function () {
-      var c = this._sceneCenter;
-      if (!c) return;
-      this._setSitVizCamera(c.x, c.y, c.z, this._sceneMaxDim || 20);
+      if (!this._points) return;
+      this._setSitVizCamera(0, 0, 0, this._sceneMaxDim || 20);
     },
 
     goToOverview: function () {
